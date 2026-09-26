@@ -9,12 +9,12 @@ The project is intended for academic and research use. It is not a certified med
 The repository provides the following working components:
 
 - A local Express backend for creating examinations, receiving fundus images, validating uploads, coordinating inference, and returning stored results.
-- A FastAPI AI service with health monitoring and a structured image-prediction contract.
+- A FastAPI AI service with health/readiness endpoints, explicit mock/model mode, and a structured image-prediction contract.
 - A SQLite data store for patients, examinations, uploaded-image metadata, and AI results.
 - Image upload validation for supported formats, decompression-bomb protection, maximum file size, maximum pixel count, and image-content verification.
 - Examination status tracking from creation through image receipt, processing, completion, or failure.
-- A deterministic mock AI adapter for testing service communication without loading a trained model.
-- A preprocessing pipeline that crops borders, resizes images, improves contrast with CLAHE, denoises them, and writes class-organised PNG files.
+- A deterministic mock adapter for integration tests and a TensorFlow adapter that loads a configured `.keras` model.
+- Shared preprocessing for one image, the batch script, and the AI service; original and processed images are stored separately with preprocessing parameters and version.
 - An EfficientNetB3 training workflow with augmentation, class weighting, checkpointing, early stopping, learning-rate reduction, and fine-tuning.
 - Integration tests covering successful requests, validation failures, AI failures, timeouts, concurrent uploads, persistence, and corrupted images.
 - A smoke-test script for exercising the local backend with a dataset image.
@@ -26,12 +26,12 @@ Client
   -> Express backend
   -> Upload validation and temporary storage
   -> Python AI service
-  -> Structured prediction
+  -> Shared preprocessing + mock or TensorFlow model prediction
   -> SQLite persistence
   -> Examination result
 ```
 
-Uploaded originals are preserved in `data/uploads/`. The backend forwards the image to the AI service, stores the returned result, and exposes the completed examination through its API.
+Uploaded originals are preserved in `data/uploads/`. The backend forwards the image to the AI service, stores the returned 300 x 300 processed PNG under a different filename, persists the result and preprocessing metadata, and exposes the completed examination through its API.
 
 ## Services and API
 
@@ -55,9 +55,10 @@ The FastAPI service listens on `http://127.0.0.1:8000` by default. Interactive A
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
 | `GET` | `/health` | Report service and model status |
+| `GET` | `/ready` | Return 200 for a ready adapter, 503 when the selected model adapter is unavailable |
 | `POST` | `/predict` | Validate an image and return a prediction contract |
 
-The default service uses a mock adapter. For every valid image, it returns a deterministic response with:
+The default service uses `AI_MODE=mock`: preprocessing is real and predictions are dummy. The prediction fields of every successful response are:
 
 ```json
 {
@@ -71,15 +72,18 @@ The default service uses a mock adapter. For every valid image, it returns a det
     "Mild": 0.07,
     "Moderate": 0.81,
     "Severe": 0.08,
-    "Proliferate_DR": 0.02
+    "Proliferative_DR": 0.02
   },
   "riskLevel": "MEDIUM",
   "modelVersion": "mock-v0",
-  "isMock": true
+  "isMock": true,
+  "preprocessingVersion": "fundus-prep-v1"
 }
 ```
 
-This response verifies the integration contract and persistence flow. It is not a real clinical inference. The service also rejects invalid or corrupted image payloads.
+The full response additionally carries `preprocessing` with a processed PNG encoded as base64 and its parameters; see [API contract](docs/api.md). The backend validates and stores that PNG without retaining base64 in the database.
+
+`AI_MODE=model` loads the Keras checkpoint configured by `MODEL_PATH`. `MODEL_CLASS_NAMES` must list the five model outputs in their training order; the adapter maps them to the canonical API labels. A missing checkpoint returns `MODEL_NOT_READY`, and a load failure returns `MODEL_LOAD_FAILED`; model mode never falls back to mock. Configure the same mode on both services. See [model contract](docs/model-contract.md).
 
 ## Examination Lifecycle
 
@@ -107,7 +111,7 @@ The service stores extensible JSON documents for examination, image, and AI-resu
 
 ### Supported classes
 
-The EfficientNetB3 classifier uses five diabetic-retinopathy classes:
+The dataset has five diabetic-retinopathy diagnosis codes:
 
 | Label | Class |
 | --- | --- |
@@ -116,6 +120,8 @@ The EfficientNetB3 classifier uses five diabetic-retinopathy classes:
 | `2` | `Moderate` |
 | `3` | `Severe` |
 | `4` | `Proliferate_DR` |
+
+These dataset codes do not establish the trained model's neuron order. Model integration requires the actual `train_ds.class_names` from training. The API maps the legacy folder name `Proliferate_DR` to `Proliferative_DR` explicitly.
 
 ### Preprocessing
 
@@ -129,16 +135,26 @@ Run `preprocess.py` to transform the source dataset from `colored_images/` into 
 6. Applies light Gaussian denoising.
 7. Saves a PNG in the corresponding class directory.
 
+Both batch and service code use `fundus/preprocessing.py`. To process one image and compare against an existing training PNG:
+
+```powershell
+.\.venv\Scripts\python.exe -m fundus.preprocessing colored_images/Moderate/000c1434d8d7.png --output data/preprocessing/processed.png --reference preprocessed_images/Moderate/000c1434d8d7.png
+```
+
+The output PNG has a JSON sidecar with parameters, hashes, and pixel comparison. Model input preparation keeps RGB values in 0–255 as float32, matching the integrated EfficientNetB3 checkpoint's internal rescaling.
+
 ### Training
 
-Run `train_efficientnetb3.py` to train an ImageNet-initialised EfficientNetB3 model. The workflow uses an 80/20 split with a fixed seed, data augmentation, class weights for imbalance, checkpointing by validation accuracy, early stopping, and learning-rate reduction. Training has a classification-head stage followed by fine-tuning of the final 30% of the backbone.
+Training and evaluation utilities live under `scripts/ml/`. The current workflow audits duplicate images, creates a fixed train/validation/test split, caches EfficientNetB3 embeddings, and compares dense, regularized, and ordinal heads. Run the ordinal workflow with:
 
-The training script produces:
+```powershell
+python scripts/ml/train_fundus_baseline.py
+python scripts/ml/train_fundus_ordinal.py
+```
 
-- `models/best_efficientnetb3.keras`: the checkpoint with the best validation accuracy.
-- `models/final_efficientnetb3_dr.keras`: the model saved after the final fine-tuning stage.
+The earlier fine-tuning workflow remains available as `scripts/ml/train_efficientnetb3_legacy.py` for comparison.
 
-The standalone training artifacts are available for model development. The default FastAPI service remains a mock adapter and does not load these files automatically.
+The currently integrated research checkpoint is `models/fundus_b3_ordinal.keras`. It can be replaced after later training by changing `MODEL_PATH`, `MODEL_VERSION`, and `MODEL_CLASS_NAMES`, provided the replacement follows the documented input and output contract. See [training results](docs/training.md) and [integration validation](docs/integration.md).
 
 ## Project Structure
 
@@ -151,15 +167,22 @@ The standalone training artifacts are available for model development. The defau
 |   `-- frontend/              # Frontend application directory
 |-- services/
 |   `-- ai-service/             # FastAPI AI service
+|-- fundus/                     # Shared preprocessing, class mapping and adapters
 |-- scripts/
+|   |-- ml/                     # Training and model-evaluation utilities
 |   `-- smoke.mjs               # Local API smoke test
+|-- docs/
+|   |-- project/                # Proposal, planner, PRD, and project assets
+|   |-- api.md
+|   |-- integration.md
+|   |-- model-contract.md
+|   `-- training.md
 |-- data/
 |   `-- uploads/                # Uploaded originals
 |-- colored_images/             # Source dataset, ignored by Git
 |-- preprocessed_images/        # Generated dataset, ignored by Git
 |-- models/                     # Generated model files, ignored by Git
 |-- preprocess.py
-|-- train_efficientnetb3.py
 |-- train.csv
 |-- package.json
 `-- README.md
@@ -168,9 +191,9 @@ The standalone training artifacts are available for model development. The defau
 ## Requirements
 
 - Node.js 22.13 or later. The backend uses Node's built-in SQLite support.
-- Python 3.10 or later.
+- Python 3.11 or later (required by the pinned NumPy version).
 - Python packages listed in `services/ai-service/requirements.txt`.
-- TensorFlow and the preprocessing dependencies when running the training pipeline.
+- TensorFlow and training dependencies when running training; pandas and tqdm when running the batch preprocessing script.
 - A local copy of the dataset when running preprocessing, training, or the smoke test with a dataset image.
 
 ## Setup
@@ -183,6 +206,17 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r services/ai-service/requirements.txt
 Copy-Item .env.example .env
 ```
+
+For real inference, set these values in `.env`:
+
+```dotenv
+AI_MODE=model
+MODEL_PATH=./models/fundus_b3_ordinal.keras
+MODEL_VERSION=fundus-b3-ordinal-aptos-v1
+MODEL_CLASS_NAMES=Mild,Moderate,No_DR,Proliferate_DR,Severe
+```
+
+Keep `AI_MODE=mock` for deterministic integration tests. The checked-in `.env.example` defaults to mock mode, while this workspace's local `.env` is configured for the integrated model.
 
 Start the AI service in one terminal:
 
@@ -212,24 +246,26 @@ PYTHON=.venv/bin/python npm test
 
 ## Testing
 
-Run the automated integration suite with:
+Run backend and Python tests with:
 
 ```powershell
 npm test
+.\.venv\Scripts\python.exe -m pip install -r services/ai-service/requirements-dev.txt
+.\.venv\Scripts\python.exe services/ai-service/test_ai_service.py
 ```
 
-The test setup starts the Python service when needed, uses temporary ports and a temporary SQLite database, and cleans up after the run. The suite exercises health checks, successful mock inference, byte preservation, database persistence, malformed metadata, missing files, spoofed images, oversized uploads, AI unavailability, timeouts, contract failures, concurrent upload locking, and corrupted-image rejection.
+The backend suite starts the Python service in mock mode, uses temporary ports and SQLite, and cleans up after the run. It exercises successful mock inference with real preprocessing, byte preservation, persistence, upload validation, unavailable AI, timeouts, invalid responses, concurrency, model readiness errors, and mock/model mode mismatch. Python tests cover preprocessing, pixel scaling, class mapping, readiness, and missing-model handling. Use the smoke command with `AI_MODE=model` for a real end-to-end inference check.
 
 ## Configuration and Generated Files
 
 The local environment can be configured through `.env` and `.env.example`. Common settings include the backend port, AI service URL, database location, and upload directory.
 
-Generated datasets, model files, SQLite databases, uploaded files, virtual environments, logs, and environment files are excluded through `.gitignore`. The `docs/` directory and the weekly planning document are also excluded from version control in this workspace.
+Generated datasets, model files, SQLite databases, uploads, virtual environments, logs, local environment files, and internal handover metadata are excluded through `.gitignore`. User-facing API, model, training, and integration documentation remains under `docs/`.
 
 ## Limitations
 
-- The default AI response is deterministic mock data and does not perform real model inference.
-- The FastAPI service does not run the standalone preprocessing pipeline before prediction.
+- The checked-in environment template defaults to deterministic mock data; real inference requires `AI_MODE=model` and an available checkpoint.
+- The integrated checkpoint is a research model trained on APTOS data. Its current evaluation is documented in [docs/training.md](docs/training.md); it is not a clinically validated diagnostic model.
 - The repository does not provide a clinical image-quality gate, Grad-CAM visualisation, PDF reporting workflow, or hardware/MQTT communication layer.
 - The backend is designed for local development and does not provide production authentication, HTTPS, or deployment configuration.
 - SQLite usage is intended for a local backend instance rather than a multi-instance production deployment.

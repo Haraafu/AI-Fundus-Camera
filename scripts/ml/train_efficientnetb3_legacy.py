@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 # KONFIGURASI
 # =========================
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parents[2]
 
 DATA_DIR = BASE_DIR / "preprocessed_images"
 MODEL_DIR = BASE_DIR / "models"

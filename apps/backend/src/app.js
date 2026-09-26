@@ -8,6 +8,7 @@ import { createStore } from './store.js';
 import { ApiError, predict } from './ai-client.js';
 
 export function createApp(config) {
+  if (!['mock', 'model'].includes(config.aiMode ?? 'mock')) throw new Error('AI_MODE must be mock or model');
   const app = express(), store = createStore(config.databasePath), busy = new Set();
   mkdirSync(config.uploadDir, { recursive: true });
   app.disable('x-powered-by');
@@ -70,7 +71,14 @@ export function createApp(config) {
         eye: exam.eye, captureType: exam.captureType, processedPath: null, preprocessingVersion: null };
       transition('IMAGE_RECEIVED');
       transition('PROCESSING');
-      exam.result = await predict(config, req.file.buffer, req.file.mimetype);
+      const prediction = await predict(config, req.file.buffer, req.file.mimetype);
+      const processedFilename = `${imageId}-processed.png`;
+      writeFileSync(join(config.uploadDir, processedFilename), prediction.processedBytes, { flag: 'wx' });
+      exam.image.processedPath = processedFilename;
+      exam.image.preprocessingVersion = prediction.preprocessing.version;
+      exam.image.preprocessingParameters = prediction.preprocessing.parameters;
+      exam.image.processedResolution = prediction.preprocessing.outputResolution;
+      exam.result = prediction.result;
       exam.completedAt = new Date().toISOString();
       transition('COMPLETED');
       res.json(exam);

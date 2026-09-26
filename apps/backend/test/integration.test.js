@@ -17,7 +17,7 @@ before(async () => {
   await new Promise(r => probe.close(r));
   aiUrl = url;
   ai = spawn(process.env.PYTHON || resolve('.venv/Scripts/python.exe'), ['services/ai-service/app.py'],
-    { env: { ...process.env, AI_SERVICE_PORT: String(port), AI_SERVICE_HOST: '127.0.0.1' }, stdio: 'pipe', windowsHide: true });
+    { env: { ...process.env, AI_MODE: 'mock', AI_SERVICE_PORT: String(port), AI_SERVICE_HOST: '127.0.0.1' }, stdio: 'pipe', windowsHide: true });
   let logs = '', spawnError;
   ai.on('error', e => { spawnError = e; });
   ai.stderr.on('data', d => { logs += d; });
@@ -55,6 +55,13 @@ test('both health endpoints and real Python mock upload; bytes preserved and res
   assert.equal(r.status, 200); assert.equal(r.body.status, 'COMPLETED');
   assert.equal(r.body.result.modelVersion, 'mock-v0'); assert.equal(r.body.result.isMock, true);
   assert.equal(r.body.result.confidence, 0.81);
+  assert.equal(r.body.result.preprocessingVersion, 'fundus-prep-v1');
+  assert.equal(r.body.image.preprocessingVersion, 'fundus-prep-v1');
+  assert.notEqual(r.body.image.processedPath, r.body.image.originalPath);
+  assert.deepEqual(r.body.image.processedResolution, [300, 300]);
+  const processed = await sharp(readFileSync(join(f.config.uploadDir, r.body.image.processedPath))).metadata();
+  assert.equal(processed.format, 'png'); assert.equal(processed.width, 300); assert.equal(processed.height, 300);
+  assert.deepEqual((await f.request(`/api/examinations/${exam.examinationId}`)).body, r.body);
   assert.deepEqual(r.body.statusHistory.map(s => s.status), ['CREATED', 'IMAGE_RECEIVED', 'PROCESSING', 'COMPLETED']);
   assert.deepEqual(readFileSync(join(f.config.uploadDir, r.body.image.originalPath)), png);
   const other = createApp(f.config);
@@ -101,4 +108,40 @@ test('Python rejects corrupt uploads directly', async () => {
   const body = new FormData(); body.append('image', new Blob(['invalid'], { type: 'image/png' }), 'bad.png');
   const r = await fetch(aiUrl + '/predict', { method: 'POST', body });
   assert.equal(r.status, 400);
+});
+
+test('model readiness errors persist as FAILED without fallback', async t => {
+  for (const code of ['MODEL_NOT_READY', 'MODEL_LOAD_FAILED']) {
+    const upstream = createServer((req, res) => {
+      req.resume(); res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: { code } }));
+    });
+    const url = await listen(upstream);
+    t.after(() => { upstream.closeAllConnections(); upstream.close(); });
+    const f = await fixture(t, { aiUrl: url, aiMode: 'model' });
+    const exam = await f.create(), response = await f.upload(exam.examinationId);
+    assert.equal(response.status, 502);
+    const saved = f.store.get(exam.examinationId);
+    assert.equal(saved.status, 'FAILED'); assert.equal(saved.error.code, code);
+    assert.equal(saved.result, null); assert.equal(saved.image.processedPath, null);
+    assert.deepEqual(readFileSync(join(f.config.uploadDir, saved.image.originalPath)), png);
+  }
+});
+
+test('invalid preprocessing, null response and a mock/model mode mismatch are rejected', async t => {
+  const form = new FormData(); form.append('image', new Blob([png], { type: 'image/png' }), 'test.png');
+  const valid = await (await fetch(aiUrl + '/predict', { method: 'POST', body: form })).json();
+  const badImage = structuredClone(valid); badImage.preprocessing.imageBase64 = Buffer.from('corrupt').toString('base64');
+  const badVersion = structuredClone(valid); badVersion.preprocessingVersion = 'unknown';
+  const missingImage = structuredClone(valid); delete missingImage.preprocessing;
+  for (const [body, aiMode] of [[null, 'mock'], [badImage, 'mock'], [badVersion, 'mock'], [missingImage, 'mock'], [valid, 'model']]) {
+    const upstream = createServer((req, res) => { req.resume(); res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(body)); });
+    const url = await listen(upstream);
+    t.after(() => { upstream.closeAllConnections(); upstream.close(); });
+    const f = await fixture(t, { aiUrl: url, aiMode });
+    const exam = await f.create(), response = await f.upload(exam.examinationId);
+    assert.equal(response.status, 502);
+    assert.equal(f.store.get(exam.examinationId).error.code, 'INVALID_AI_RESPONSE');
+    assert.equal(f.store.get(exam.examinationId).result, null);
+  }
 });

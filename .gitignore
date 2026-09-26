@@ -1,17 +1,30 @@
-# Generated image datasets
-preprocessed_images/
-colored_images/
-models/
-models.zip
-node_modules/
-.venv/
-__pycache__/
-docs/*
-!docs/api.md
-Weekly_Planner_Software_Despro2_Final.md
+# Local configuration and secrets
 .env
 .env.*
 !.env.example
+
+# Dependencies and caches
+.venv/
+node_modules/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Generated datasets, downloads, models, and runtime state
+colored_images/
+preprocessed_images/
+models/
+models.zip
 data/
 *.sqlite*
 *.log
+
+# Internal handover notes and machine-specific validation metadata
+docs/internal/
+
+# Temporary editor and operating-system files
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db

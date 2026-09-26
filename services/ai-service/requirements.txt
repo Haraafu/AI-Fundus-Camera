@@ -3,3 +3,6 @@ uvicorn==0.41.0
 python-multipart==0.0.22
 Pillow==12.1.1
 python-dotenv==1.2.2
+numpy==2.4.4
+opencv-python-headless==4.13.0.92
+tensorflow==2.21.0
