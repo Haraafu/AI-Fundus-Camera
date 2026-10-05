@@ -1,6 +1,6 @@
 # AI Fundus Camera
 
-AI Fundus Camera is a local research prototype for fundus-image processing and AI-assisted diabetic-retinopathy screening. It combines an image preprocessing and EfficientNetB3 training pipeline with a Node.js backend, a SQLite examination store, and a separate Python AI service.
+AI Fundus Camera is a local research prototype for fundus-image processing and AI-assisted diabetic-retinopathy screening. It combines an image preprocessing and EfficientNetB3 training pipeline with a Node.js backend, SQLite or MongoDB persistence, and a separate Python AI service.
 
 The project is intended for academic and research use. It is not a certified medical device, does not replace clinical examination, and must not be used as the sole basis for a medical decision.
 
@@ -10,7 +10,7 @@ The repository provides the following working components:
 
 - A local Express backend for creating examinations, receiving fundus images, validating uploads, coordinating inference, and returning stored results.
 - A FastAPI AI service with health/readiness endpoints, explicit mock/model mode, and a structured image-prediction contract.
-- A SQLite data store for patients, examinations, uploaded-image metadata, and AI results.
+- SQLite and MongoDB stores for patients, examinations, uploaded-image metadata, and AI results.
 - Image upload validation for supported formats, decompression-bomb protection, maximum file size, maximum pixel count, and image-content verification.
 - Examination status tracking from creation through image receipt, processing, completion, or failure.
 - A deterministic mock adapter for integration tests and a TensorFlow adapter that loads a configured `.keras` model.
@@ -18,6 +18,7 @@ The repository provides the following working components:
 - An EfficientNetB3 training workflow with augmentation, class weighting, checkpointing, early stopping, learning-rate reduction, and fine-tuning.
 - Integration tests covering successful requests, validation failures, AI failures, timeouts, concurrent uploads, persistence, and corrupted images.
 - A smoke-test script for exercising the local backend with a dataset image.
+- A frontend MVP with dashboard, patient history, examination upload, original/processed images, and model results.
 
 ## System Flow
 
@@ -27,7 +28,7 @@ Client
   -> Upload validation and temporary storage
   -> Python AI service
   -> Shared preprocessing + mock or TensorFlow model prediction
-  -> SQLite persistence
+  -> SQLite or MongoDB persistence
   -> Examination result
 ```
 
@@ -96,7 +97,7 @@ CREATED -> IMAGE_RECEIVED -> PROCESSING -> COMPLETED
 
 The backend preserves the original upload when processing fails and records an error code and message. A second upload for the same examination is rejected after the first upload has started; a new examination should be created for a retake. If the backend restarts during processing, the interrupted examination is marked as failed.
 
-## Data Storage (Still Temporary)
+## Data Storage
 
 SQLite is created automatically at `data/fundus.sqlite`. The store contains:
 
@@ -106,6 +107,8 @@ SQLite is created automatically at `data/fundus.sqlite`. The store contains:
 - `ai_results`: prediction, confidence, probabilities, risk level, model version, and mock flag.
 
 The service stores extensible JSON documents for examination, image, and AI-result records. Uploaded files are stored under `data/uploads/` while the database keeps their metadata and references.
+
+To use MongoDB, configure `DATABASE_URL` and optionally `DATABASE_NAME` in the ignored local `.env` file. The backend selects MongoDB when the URL is non-empty and otherwise retains SQLite. MongoDB writes the four entities to separate collections and uses a transaction for each examination update.
 
 ## Machine-Learning Pipeline
 
@@ -229,6 +232,8 @@ Start the backend in a second terminal:
 ```powershell
 npm run backend
 ```
+
+Open `http://127.0.0.1:3001/dashboard` to use the frontend. It is served by the backend and requires no separate build step. Risk categories are calculated in the backend independently of inference, with a stored rule version. See [API contract](docs/api.md).
 
 Run a local smoke test in a third terminal:
 

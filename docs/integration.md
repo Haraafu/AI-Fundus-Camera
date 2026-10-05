@@ -91,6 +91,14 @@ npm run backend
 npm run smoke -- "colored_images/Moderate/000c1434d8d7.png"
 ```
 
+## Database dan frontend MVP
+
+Dashboard, pasien/riwayat, pemeriksaan baru, dan hasil tersedia pada origin backend `http://127.0.0.1:3001`. MongoDB Atlas digunakan jika `DATABASE_URL` terisi; SQLite tetap tersedia untuk test lokal. Hasil menyimpan `imageId`, timestamp, waktu request inference, kategori risiko dan versi aturan. Metadata citra original/processed menyimpan MIME, ukuran, resolusi, SHA-256, parameter serta versi preprocessing. File masih berada di `UPLOAD_DIR` dan diambil melalui endpoint yang memeriksa examination ID.
+
+Aturan risiko di `apps/backend/src/risk.js` terpisah dari inference. UI menampilkan confidence sebagai probabilitas kelas dan kategori risiko sebagai aturan prototipe, serta penanda MOCK bila model dummy digunakan.
+
+Validasi MVP: 10/10 tes Node lulus. Smoke test dengan model aktual dan MongoDB Atlas menghasilkan examination COMPLETED, `isMock=false`, confidence/probabilitas, metadata gambar dan versi aturan yang dapat dibaca kembali. Halaman dashboard dan hasil diverifikasi di browser dengan gambar original dan processed. Identitas sample uji adalah `DEMO-001` dan gambar berasal dari dataset lokal.
+
 ## Mengganti checkpoint
 
 1. Verifikasi checksum, input shape, output shape, urutan kelas, preprocessing, dan versi runtime model baru.

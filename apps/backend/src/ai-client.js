@@ -1,4 +1,5 @@
 import sharp from 'sharp';
+import { scoreRisk } from './risk.js';
 
 export const CLASSES = ['No_DR', 'Mild', 'Moderate', 'Severe', 'Proliferative_DR'];
 const PREPROCESSING_VERSION = 'fundus-prep-v1';
@@ -49,7 +50,7 @@ export async function predict(config, buffer, mime) {
     throw new ApiError(502, 'INVALID_AI_RESPONSE', 'AI preprocessing output does not match the contract.');
   }
   return { result: { predictedClass: result.prediction.class, confidence: result.prediction.confidence,
-      probabilities: p, riskLevel: result.riskLevel, modelVersion: result.modelVersion, isMock: result.isMock,
+      probabilities: p, ...scoreRisk(result.prediction.class), modelVersion: result.modelVersion, isMock: result.isMock,
       preprocessingVersion: result.preprocessingVersion },
     processedBytes, preprocessing: { version: prep.version, parameters: prep.parameters, outputResolution: prep.outputResolution } };
 }

@@ -8,6 +8,7 @@ import { createServer } from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
 import sharp from 'sharp';
 import { createApp } from '../src/app.js';
+import { scoreRisk } from '../src/risk.js';
 
 let ai, aiUrl, png;
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${server.address().port}`)));
@@ -36,7 +37,7 @@ async function fixture(t, overrides = {}) {
   const config = { databasePath: join(dir, 'db.sqlite'), uploadDir: join(dir, 'uploads'), aiUrl, aiTimeout: 3000, maxUploadBytes: 1024 * 1024, ...overrides };
   const { app, store } = createApp(config);
   const server = createServer(app), base = await listen(server);
-  t.after(async () => { server.closeAllConnections(); await new Promise(r => server.close(r)); store.close(); rmSync(dir, { recursive: true, force: true }); });
+  t.after(async () => { server.closeAllConnections(); await new Promise(r => server.close(r)); await store.close(); rmSync(dir, { recursive: true, force: true }); });
   const request = async (path, options) => { const r = await fetch(base + path, options); return { status: r.status, body: await r.json() }; };
   const create = async () => (await request('/api/examinations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ patientId: 'TEST-001', eye: 'RIGHT', captureType: 'MACULA_CENTERED' }) })).body;
   const upload = (id, bytes = png, type = 'image/png', extra = {}) => {
@@ -44,7 +45,7 @@ async function fixture(t, overrides = {}) {
     for (const [key, value] of Object.entries(extra)) form.append(key, value);
     return request(`/api/examinations/${id}/images`, { method: 'POST', body: form });
   };
-  return { request, create, upload, config, store };
+  return { request, create, upload, config, store, base };
 }
 test('both health endpoints and real Python mock upload; bytes preserved and result persists', async t => {
   const f = await fixture(t);
@@ -65,7 +66,7 @@ test('both health endpoints and real Python mock upload; bytes preserved and res
   assert.deepEqual(r.body.statusHistory.map(s => s.status), ['CREATED', 'IMAGE_RECEIVED', 'PROCESSING', 'COMPLETED']);
   assert.deepEqual(readFileSync(join(f.config.uploadDir, r.body.image.originalPath)), png);
   const other = createApp(f.config);
-  assert.deepEqual(other.store.get(exam.examinationId), r.body); other.store.close();
+  assert.deepEqual(await other.store.get(exam.examinationId), r.body); await other.store.close();
   assert.equal((await f.upload(exam.examinationId)).status, 409);
 });
 test('invalid metadata, missing file, unknown ID, spoofed image, oversized image', async t => {
@@ -78,13 +79,13 @@ test('invalid metadata, missing file, unknown ID, spoofed image, oversized image
   assert.equal((await f.upload(e.examinationId, png, 'text/plain')).status, 400);
   assert.equal((await f.upload(e.examinationId, png, 'image/png', { eye: 'LEFT' })).status, 400);
   assert.equal((await f.upload(e.examinationId, Buffer.alloc(png.length + 11))).status, 413);
-  assert.equal(f.store.get(e.examinationId).status, 'CREATED');
+  assert.equal((await f.store.get(e.examinationId)).status, 'CREATED');
 });
 test('AI unavailable records FAILED and preserves original', async t => {
   const f = await fixture(t, { aiUrl: 'http://127.0.0.1:1' });
   const e = await f.create(), r = await f.upload(e.examinationId);
   assert.equal(r.status, 502);
-  const saved = f.store.get(e.examinationId);
+  const saved = await f.store.get(e.examinationId);
   assert.equal(saved.status, 'FAILED'); assert.equal(saved.error.code, 'AI_UNAVAILABLE');
   assert.equal(saved.result, null); assert.ok(saved.image);
 });
@@ -96,7 +97,7 @@ test('timeout and malformed upstream response fail instead of completing', async
     const f = await fixture(t, { aiUrl: url, aiTimeout: 100 });
     const e = await f.create(), r = await f.upload(e.examinationId);
     assert.equal(r.status, 502);
-    assert.equal(f.store.get(e.examinationId).error.code, mode === 'timeout' ? 'AI_TIMEOUT' : 'INVALID_AI_RESPONSE');
+    assert.equal((await f.store.get(e.examinationId)).error.code, mode === 'timeout' ? 'AI_TIMEOUT' : 'INVALID_AI_RESPONSE');
   }
 });
 test('concurrent uploads allow only one inference', async t => {
@@ -110,6 +111,35 @@ test('Python rejects corrupt uploads directly', async () => {
   assert.equal(r.status, 400);
 });
 
+test('patient history, private image retrieval and frontend work with persisted examinations', async t => {
+  const f = await fixture(t);
+  const patient = await f.request('/api/patients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ patientId: 'TEST-001' }) });
+  assert.equal(patient.status, 201);
+  assert.equal((await f.request('/api/patients')).body[0].patientId, 'TEST-001');
+  const exam = await f.create();
+  assert.equal((await f.request('/api/examinations?patientId=TEST-001')).body.length, 1);
+  assert.equal((await f.request('/api/examinations?patientId=OTHER')).body.length, 0);
+  assert.equal((await f.request('/api/examinations?patientId[]=bad')).status, 400);
+  assert.equal((await f.request(`/api/examinations/${exam.examinationId}/images/processed`)).status, 404);
+  const uploaded = await f.upload(exam.examinationId);
+  assert.equal(uploaded.body.result.riskRuleVersion, 'dr-grade-risk-v1');
+  assert.equal(uploaded.body.result.imageId, uploaded.body.image.imageId);
+  const image = await fetch(`${f.base}/api/examinations/${exam.examinationId}/images/original`);
+  assert.equal(image.status, 200);
+  assert.equal(image.headers.get('cache-control'), 'private, no-store');
+  assert.deepEqual(Buffer.from(await image.arrayBuffer()), png);
+  const page = await fetch(`${f.base}/patients`);
+  assert.equal(page.status, 200);
+  assert.match(await page.text(), /Fundus/);
+});
+
+test('risk categories are versioned and independent of inference', () => {
+  for (const [name, level] of Object.entries({ No_DR: 'LOW', Mild: 'LOW', Moderate: 'MEDIUM', Severe: 'HIGH', Proliferative_DR: 'HIGH' })) {
+    assert.deepEqual(scoreRisk(name), { riskLevel: level, riskRuleVersion: 'dr-grade-risk-v1' });
+  }
+  assert.throws(() => scoreRisk('invalid'));
+});
+
 test('model readiness errors persist as FAILED without fallback', async t => {
   for (const code of ['MODEL_NOT_READY', 'MODEL_LOAD_FAILED']) {
     const upstream = createServer((req, res) => {
@@ -121,7 +151,7 @@ test('model readiness errors persist as FAILED without fallback', async t => {
     const f = await fixture(t, { aiUrl: url, aiMode: 'model' });
     const exam = await f.create(), response = await f.upload(exam.examinationId);
     assert.equal(response.status, 502);
-    const saved = f.store.get(exam.examinationId);
+    const saved = await f.store.get(exam.examinationId);
     assert.equal(saved.status, 'FAILED'); assert.equal(saved.error.code, code);
     assert.equal(saved.result, null); assert.equal(saved.image.processedPath, null);
     assert.deepEqual(readFileSync(join(f.config.uploadDir, saved.image.originalPath)), png);
@@ -141,7 +171,7 @@ test('invalid preprocessing, null response and a mock/model mode mismatch are re
     const f = await fixture(t, { aiUrl: url, aiMode });
     const exam = await f.create(), response = await f.upload(exam.examinationId);
     assert.equal(response.status, 502);
-    assert.equal(f.store.get(exam.examinationId).error.code, 'INVALID_AI_RESPONSE');
-    assert.equal(f.store.get(exam.examinationId).result, null);
+    assert.equal((await f.store.get(exam.examinationId)).error.code, 'INVALID_AI_RESPONSE');
+    assert.equal((await f.store.get(exam.examinationId)).result, null);
   }
 });

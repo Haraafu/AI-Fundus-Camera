@@ -35,3 +35,23 @@ For the regularized model, test recall was: No_DR 0.996, Mild 0.569, Moderate 0.
 The ordinal model reflects the ordered grades through four cumulative decisions. It improves test quadratic weighted kappa and Proliferate_DR recall compared with the regularized linear head, but reduces Mild and Severe recall. Its checkpoint is integrated as the current research model while larger patient-level data are collected; this choice does not make it clinically final.
 
 These are internal research results. The older checkpoints used a separate validation split for selection and are not directly comparable to the new held-out test. This run does not establish clinical performance. Before clinical use, the model needs label review, patient-level splitting, external validation, and evaluation of sensitivity at a prespecified screening threshold. The checked-in environment template defaults to mock mode; setting `AI_MODE=model` loads the configured checkpoint through the FastAPI TensorFlow adapter.
+
+## EyePACS training
+
+The Kaggle EyePACS download is stored as numbered ZIP chunks. Prepare it without creating a second 35 GiB copy of the raw images:
+
+```powershell
+# Small end-to-end check: 100 patients in each split
+python scripts/ml/prepare_eyepacs.py --pilot-patients 100 --output data/eyepacs/pilot
+python scripts/ml/train_eyepacs.py --data data/eyepacs/pilot --output models/eyepacs_b3_pilot --skip-fine-tune --head-epochs 2
+
+# Full patient-level dataset
+python scripts/ml/prepare_eyepacs.py
+python scripts/ml/train_eyepacs.py
+```
+
+After the full run, the best checkpoint is `models/eyepacs_b3/best.keras`, the epoch log is `models/eyepacs_b3/history.csv`, and the held-out metrics are in `models/eyepacs_b3/report.json`. Do not use the pilot score to judge quality; it only checks that every pipeline stage works.
+
+The full run contains 35,126 images from 17,563 patients. The split is made by patient ID, so left and right eyes from one patient stay in one split. The preparation uses the same crop, CLAHE, resize, and blur operations as production inference. Training uses ImageNet EfficientNetB3, class weighting, augmentation, checkpointing, learning-rate reduction, and early stopping. The final report includes accuracy, macro F1, per-class metrics, confusion matrices, and quadratic weighted kappa for train, validation, and the untouched test split.
+
+Native Windows TensorFlow 2.21 cannot use a GPU. A full fine-tuning run should use a Kaggle GPU notebook, Google Colab, Linux, or WSL2 with a supported NVIDIA GPU. A local CPU run is suitable for the pilot and frozen-head checks; it is not practical for repeated full fine-tuning.
