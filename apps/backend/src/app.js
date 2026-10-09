@@ -8,6 +8,9 @@ import { fileURLToPath } from 'node:url';
 import { createStore } from './store.js';
 import { ApiError, predict } from './ai-client.js';
 
+import { createReportHandler } from './report.js';
+
+
 export function createApp(config) {
   if (!['mock', 'model'].includes(config.aiMode ?? 'mock')) throw new Error('AI_MODE must be mock or model');
   const app = express(), store = config.store ?? createStore(config.databasePath), busy = new Set();
@@ -35,12 +38,14 @@ export function createApp(config) {
   app.post('/api/examinations', async (req, res) => {
     const { patientId, eye, captureType } = req.body ?? {};
     if (typeof patientId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(patientId) ||
-        !['LEFT', 'RIGHT'].includes(eye) || !['MACULA_CENTERED', 'OPTIC_DISC_CENTERED'].includes(captureType)) {
+      !['LEFT', 'RIGHT'].includes(eye) || !['MACULA_CENTERED', 'OPTIC_DISC_CENTERED'].includes(captureType)) {
       throw new ApiError(400, 'INVALID_METADATA', 'Provide patientId (anonymous code), eye and captureType.');
     }
     const createdAt = new Date().toISOString();
-    const exam = { examinationId: randomUUID(), patientId, eye, captureType, status: 'CREATED', createdAt,
-      completedAt: null, image: null, result: null, error: null, statusHistory: [{ status: 'CREATED', timestamp: createdAt }] };
+    const exam = {
+      examinationId: randomUUID(), patientId, eye, captureType, status: 'CREATED', createdAt,
+      completedAt: null, image: null, result: null, error: null, statusHistory: [{ status: 'CREATED', timestamp: createdAt }]
+    };
     await store.save(exam);
     res.status(201).json(exam);
   });
@@ -60,9 +65,11 @@ export function createApp(config) {
       if (error) next(new ApiError(error.status === 404 ? 404 : 500, 'IMAGE_NOT_FOUND', 'Image could not be loaded.'));
     });
   });
-  const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: config.maxUploadBytes, files: 1, fields: 4 },
+  const upload = multer({
+    storage: multer.memoryStorage(), limits: { fileSize: config.maxUploadBytes, files: 1, fields: 4 },
     fileFilter: (req, file, cb) => cb(['image/png', 'image/jpeg'].includes(file.mimetype) ? null :
-      new ApiError(400, 'INVALID_IMAGE', 'Only PNG and JPEG are supported.'), true) }).single('image');
+      new ApiError(400, 'INVALID_IMAGE', 'Only PNG and JPEG are supported.'), true)
+  }).single('image');
   app.post('/api/examinations/:id/images', find, (req, res, next) => {
     if (req.exam.status !== 'CREATED' || busy.has(req.params.id)) return next(new ApiError(409, 'EXAMINATION_LOCKED', 'Create a new examination for another upload.'));
     const examinationId = req.params.id;
@@ -75,7 +82,7 @@ export function createApp(config) {
     if (!req.file) throw new ApiError(400, 'INVALID_IMAGE', 'Multipart field image is required.');
     const { eye, capture_type: captureType, device_id: deviceId, capture_timestamp: capturedAt } = req.body;
     if ((eye && eye !== exam.eye) || (captureType && captureType !== exam.captureType) ||
-        (deviceId && !/^[A-Za-z0-9_-]{1,64}$/.test(deviceId)) || (capturedAt && !Number.isFinite(Date.parse(capturedAt)))) {
+      (deviceId && !/^[A-Za-z0-9_-]{1,64}$/.test(deviceId)) || (capturedAt && !Number.isFinite(Date.parse(capturedAt)))) {
       throw new ApiError(400, 'INVALID_METADATA', 'Image metadata is invalid or differs from examination.');
     }
     let metadata;
@@ -83,7 +90,7 @@ export function createApp(config) {
       const image = sharp(req.file.buffer, { limitInputPixels: 40000000, failOn: 'warning' });
       metadata = await image.metadata();
       if (!['png', 'jpeg'].includes(metadata.format) || (metadata.pages ?? 1) !== 1 ||
-          req.file.mimetype !== `image/${metadata.format}`) throw new Error('Invalid format');
+        req.file.mimetype !== `image/${metadata.format}`) throw new Error('Invalid format');
       await image.stats();
     } catch { throw new ApiError(400, 'INVALID_IMAGE', 'Image cannot be decoded as a single PNG/JPEG image.'); }
     async function transition(status) {
@@ -94,10 +101,12 @@ export function createApp(config) {
     try {
       const imageId = randomUUID(), filename = `${imageId}.${metadata.format === 'png' ? 'png' : 'jpg'}`;
       writeFileSync(join(config.uploadDir, filename), req.file.buffer, { flag: 'wx' });
-      exam.image = { imageId, originalPath: filename, mimeType: req.file.mimetype, sizeBytes: req.file.size,
+      exam.image = {
+        imageId, originalPath: filename, mimeType: req.file.mimetype, sizeBytes: req.file.size,
         originalSha256: createHash('sha256').update(req.file.buffer).digest('hex'),
         originalResolution: [metadata.width, metadata.height], deviceId: deviceId || null, capturedAt: capturedAt || null,
-        eye: exam.eye, captureType: exam.captureType, processedPath: null, preprocessingVersion: null };
+        eye: exam.eye, captureType: exam.captureType, processedPath: null, preprocessingVersion: null
+      };
       await transition('IMAGE_RECEIVED');
       await transition('PROCESSING');
       const predictionStarted = performance.now();
@@ -122,21 +131,31 @@ export function createApp(config) {
     } catch (error) {
       exam.result = null;
       exam.completedAt = null;
-      exam.error = { code: error.code && error instanceof ApiError ? error.code : 'PROCESSING_FAILED',
-        message: error instanceof ApiError ? error.message : 'Processing failed.' };
+      exam.error = {
+        code: error.code && error instanceof ApiError ? error.code : 'PROCESSING_FAILED',
+        message: error instanceof ApiError ? error.message : 'Processing failed.'
+      };
       await transition('FAILED');
       throw error;
     }
   });
   const frontend = fileURLToPath(new URL('../../frontend/', import.meta.url));
+
+  // NOTE buat FALAH = Ini endpoint GENERATE PDF
+  app.get('/api/examinations/:id/report', find, createReportHandler(config));
+
   app.use(express.static(frontend));
   app.get(['/dashboard', '/patients', '/patients/:patientId', '/examinations/new', '/examinations/:id'], (req, res) => res.sendFile(join(frontend, 'index.html')));
   app.use((req, res) => res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Route not found.' } }));
   app.use((error, req, res, next) => {
     const tooLarge = error.code === 'LIMIT_FILE_SIZE';
     const status = tooLarge ? 413 : error instanceof multer.MulterError || error.type === 'entity.parse.failed' ? 400 : error.status || 500;
-    res.status(status).json({ success: false, error: { code: tooLarge ? 'UPLOAD_TOO_LARGE' : error instanceof ApiError ? error.code : status === 400 ? 'INVALID_REQUEST' : 'INTERNAL_ERROR',
-      message: error instanceof ApiError ? error.message : tooLarge ? 'Image exceeds upload limit.' : 'Request could not be processed.' } });
+    res.status(status).json({
+      success: false, error: {
+        code: tooLarge ? 'UPLOAD_TOO_LARGE' : error instanceof ApiError ? error.code : status === 400 ? 'INVALID_REQUEST' : 'INTERNAL_ERROR',
+        message: error instanceof ApiError ? error.message : tooLarge ? 'Image exceeds upload limit.' : 'Request could not be processed.'
+      }
+    });
   });
   return { app, store };
 }

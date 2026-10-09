@@ -28,3 +28,6 @@ docs/internal/
 *.bak
 .DS_Store
 Thumbs.db
+
+services/pdf_generator/venv
+*.pdf

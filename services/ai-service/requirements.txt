@@ -6,3 +6,5 @@ python-dotenv==1.2.2
 numpy==2.4.4
 opencv-python-headless==4.13.0.92
 tensorflow==2.21.0
+
+reportlab==5.0.1
