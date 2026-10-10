@@ -3,6 +3,7 @@ import multer from 'multer';
 import sharp from 'sharp';
 import { randomUUID, createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { unlink } from 'node:fs/promises';
 import { join, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createStore } from './store.js';
@@ -13,12 +14,38 @@ import { createReportHandler } from './report.js';
 
 export function createApp(config) {
   if (!['mock', 'model'].includes(config.aiMode ?? 'mock')) throw new Error('AI_MODE must be mock or model');
-  const app = express(), store = config.store ?? createStore(config.databasePath), busy = new Set();
+  const app = express(), store = config.store ?? createStore(config.databasePath), busy = new Set(), devices = new Map();
   mkdirSync(config.uploadDir, { recursive: true });
   app.disable('x-powered-by');
   app.use(express.json({ limit: '16kb' }));
   app.get('/health', (req, res) => res.json({ status: 'healthy', service: 'backend' }));
-  app.get('/api/system', (req, res) => res.json({ storage: store.type || 'sqlite', aiMode: config.aiMode || 'mock' }));
+  app.get('/api/system', async (req, res) => {
+    let aiReady = false;
+    try {
+      const response = await fetch(`${config.aiUrl}/ready`, { signal: AbortSignal.timeout(2000) });
+      const status = await response.json();
+      aiReady = response.ok && status.ready === true && status.mode === (config.aiMode || 'mock');
+    } catch {}
+    res.json({ storage: store.type || 'sqlite', aiMode: config.aiMode || 'mock', aiReady });
+  });
+  app.get('/api/devices', (req, res) => res.json([...devices.values()].map(device => ({ ...device,
+    isOnline: Date.now() - Date.parse(device.lastSeen) < 60000 }))));
+  app.post('/api/devices/:deviceId/status', async (req, res) => {
+    const deviceId = req.params.deviceId, { status, examinationId, message } = req.body ?? {};
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(deviceId) || !['IDLE', 'READY', 'CAPTURING', 'UPLOADING', 'ERROR'].includes(status) ||
+        (examinationId !== undefined && (typeof examinationId !== 'string' || !await store.get(examinationId))) ||
+        (message !== undefined && (typeof message !== 'string' || message.length > 240))) {
+      throw new ApiError(400, 'INVALID_DEVICE_STATUS', 'Invalid device status or examination reference.');
+    }
+    if (!devices.has(deviceId) && devices.size >= 100) throw new ApiError(429, 'DEVICE_LIMIT', 'Device registry is full.');
+    const previous = devices.get(deviceId), timestamp = new Date().toISOString();
+    const statusHistory = previous?.status === status ? previous.statusHistory
+      : [...(previous?.statusHistory || []), { status, timestamp }].slice(-12);
+    const device = { deviceId, status, lastSeen: timestamp, examinationId: examinationId || null,
+      message: message || null, statusHistory };
+    devices.set(deviceId, device);
+    res.json({ ...device, isOnline: true });
+  });
   app.get('/api/patients', async (req, res) => res.json(await store.listPatients()));
   app.post('/api/patients', async (req, res) => {
     const patientId = req.body?.patientId;
@@ -55,10 +82,28 @@ export function createApp(config) {
     next();
   }
   app.get('/api/examinations/:id', find, (req, res) => res.json(req.exam));
+  app.delete('/api/examinations/:id', find, async (req, res) => {
+    const id = req.params.id;
+    if (busy.has(id) || ['IMAGE_RECEIVED', 'PROCESSING'].includes(req.exam.status)) {
+      throw new ApiError(409, 'EXAMINATION_LOCKED', 'Pemeriksaan sedang diproses. Tunggu hingga selesai sebelum menghapus.');
+    }
+    busy.add(id);
+    try {
+      if (!await store.deleteExamination(id)) throw new ApiError(404, 'EXAMINATION_NOT_FOUND', 'Examination not found.');
+      const fields = ['originalPath', 'processedPath', 'gradcamPath', 'heatmapPath'];
+      const filenames = [...new Set(fields.map(field => req.exam.image?.[field]).filter(name =>
+        typeof name === 'string' && name.length > 0 && name === basename(name)))];
+      const cleanup = await Promise.allSettled(filenames.map(name => unlink(resolve(config.uploadDir, name))));
+      const filesRemoved = cleanup.every(item => item.status === 'fulfilled' || item.reason?.code === 'ENOENT');
+      for (const device of devices.values()) if (device.examinationId === id) device.examinationId = null;
+      res.json({ deleted: true, examinationId: id, filesRemoved });
+    } finally { busy.delete(id); }
+  });
   app.get('/api/examinations/:id/images/:variant', find, (req, res, next) => {
     const variant = req.params.variant;
-    if (!['original', 'processed'].includes(variant)) throw new ApiError(404, 'IMAGE_NOT_FOUND', 'Image not found.');
-    const filename = req.exam.image?.[variant === 'original' ? 'originalPath' : 'processedPath'];
+    if (!['original', 'processed', 'gradcam', 'heatmap'].includes(variant)) throw new ApiError(404, 'IMAGE_NOT_FOUND', 'Image not found.');
+    const field = { original: 'originalPath', processed: 'processedPath', gradcam: 'gradcamPath', heatmap: 'heatmapPath' }[variant];
+    const filename = req.exam.image?.[field];
     if (!filename || filename !== basename(filename)) throw new ApiError(404, 'IMAGE_NOT_FOUND', 'Image not found.');
     res.set('Cache-Control', 'private, no-store');
     res.sendFile(resolve(config.uploadDir, filename), error => {
@@ -81,8 +126,10 @@ export function createApp(config) {
     const exam = req.exam;
     if (!req.file) throw new ApiError(400, 'INVALID_IMAGE', 'Multipart field image is required.');
     const { eye, capture_type: captureType, device_id: deviceId, capture_timestamp: capturedAt } = req.body;
-    if ((eye && eye !== exam.eye) || (captureType && captureType !== exam.captureType) ||
-      (deviceId && !/^[A-Za-z0-9_-]{1,64}$/.test(deviceId)) || (capturedAt && !Number.isFinite(Date.parse(capturedAt)))) {
+    if (Object.values(req.body).some(value => typeof value !== 'string') ||
+        (eye && eye !== exam.eye) || (captureType && captureType !== exam.captureType) ||
+        (deviceId && !/^[A-Za-z0-9_-]{1,64}$/.test(deviceId)) || (capturedAt && !Number.isFinite(Date.parse(capturedAt)))) {
+
       throw new ApiError(400, 'INVALID_METADATA', 'Image metadata is invalid or differs from examination.');
     }
     let metadata;
@@ -122,6 +169,14 @@ export function createApp(config) {
       exam.image.preprocessingParameters = prediction.preprocessing.parameters;
       exam.image.processedResolution = prediction.preprocessing.outputResolution;
       exam.result = prediction.result;
+      for (const [key, field, suffix] of [['overlay', 'gradcamPath', 'gradcam'], ['heatmap', 'heatmapPath', 'heatmap']]) {
+        if (prediction.explanation[key]) {
+          const name = `${imageId}-${suffix}.png`, bytes = prediction.explanation[key];
+          writeFileSync(join(config.uploadDir, name), bytes, { flag: 'wx' });
+          exam.image[field] = name;
+          exam.image[`${suffix}Sha256`] = createHash('sha256').update(bytes).digest('hex');
+        }
+      }
       exam.result.imageId = imageId;
       exam.result.inferenceTimeMs = inferenceTimeMs;
       exam.result.createdAt = new Date().toISOString();
@@ -145,7 +200,7 @@ export function createApp(config) {
   app.get('/api/examinations/:id/report', find, createReportHandler(config));
 
   app.use(express.static(frontend));
-  app.get(['/dashboard', '/patients', '/patients/:patientId', '/examinations/new', '/examinations/:id'], (req, res) => res.sendFile(join(frontend, 'index.html')));
+  app.get(['/dashboard', '/devices', '/patients', '/patients/:patientId', '/examinations/new', '/examinations/:id'], (req, res) => res.sendFile(join(frontend, 'index.html')));
   app.use((req, res) => res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Route not found.' } }));
   app.use((error, req, res, next) => {
     const tooLarge = error.code === 'LIMIT_FILE_SIZE';

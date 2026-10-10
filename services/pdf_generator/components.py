@@ -35,20 +35,20 @@ def get_placeholder_image(width=200, height=200, text="Image Unavailable"):
     return d
 
 def get_image_table(img_clahe_path, img_gradcam_path):
-    # Conditionally load the image or generate the placeholder
-    if os.path.exists(img_clahe_path):
-        img1 = Image(img_clahe_path, width=200, height=200)
-    else:
-        img1 = get_placeholder_image(200, 200, "CLAHE Unavailable")
-        
-    if os.path.exists(img_gradcam_path):
-        img2 = Image(img_gradcam_path, width=200, height=200)
-    else:
-        img2 = get_placeholder_image(200, 200, "Grad-CAM Unavailable")
-    
+    def load_image(path, label):
+        try:
+            from PIL import Image as PILImage
+            with PILImage.open(path) as source:
+                source.verify()
+            return Image(path, width=200, height=200)
+        except (OSError, ValueError, TypeError):
+            return get_placeholder_image(200, 200, label)
+    img1 = load_image(img_clahe_path, "Processed Unavailable")
+    img2 = load_image(img_gradcam_path, "Grad-CAM Unavailable")
+
     data = [
         [Paragraph("<b>Preprocessed Image</b>", styles['Normal']), 
-         Paragraph("<b>Heatmap Analysis</b>", styles['Normal'])],
+         Paragraph("<b>Grad-CAM Overlay</b>", styles['Normal'])],
         [img1, img2]
     ]
     

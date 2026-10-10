@@ -61,6 +61,26 @@ Error: `{ "success": false, "error": { "code": "...", "message": "..." } }`. Sta
 
 Dalam mode mock, semua citra valid menghasilkan prediksi dummy yang sama. Dalam mode model, probabilitas berasal dari checkpoint TensorFlow yang dikonfigurasi dan dipetakan ke label kanonis. Contoh parameters di atas diringkas; lihat kontrak model untuk parameter lengkap. Python menolak corrupt/format salah (400), file terlalu besar (413), multipart tanpa image (422 validasi FastAPI), dan model belum siap (503 MODEL_NOT_READY atau MODEL_LOAD_FAILED). Backend menerjemahkan kegagalan service menjadi error 502 tanpa rincian internal. Mode mock/aktual yang tidak cocok dengan konfigurasi backend dan citra hasil preprocessing yang tidak valid menghasilkan INVALID_AI_RESPONSE.
 
-## Penyimpanan
+## Visualisasi Grad-CAM
+
+Dalam mode model, `/predict` dapat menyertakan `explanation`. Status `AVAILABLE` membawa `method=Grad-CAM`, `version=gradcam-v1`, kelas target, nama layer, `coordinateSpace=processed`, resolusi 300 × 300, serta PNG overlay dan heatmap dalam base64. Backend memvalidasi kelas target dan isi kedua PNG, kemudian menyimpan berkas terpisah. Database menyimpan metadata dan referensi berkas, tanpa base64.
+
+Hasil examination memuat `result.explanation` serta `image.gradcamPath`, `image.heatmapPath`, dan checksum masing-masing. Citra dapat diambil melalui `GET /api/examinations/:id/images/gradcam` atau `/heatmap`. Endpoint mengembalikan 404 jika visualisasi tidak tersedia.
+
+Status `UNAVAILABLE` memiliki alasan seperti `NO_POSITIVE_ACTIVATION`, `EXPLANATION_FAILED`, atau `NOT_PROVIDED`. Prediksi yang valid tetap dapat ditampilkan tanpa visualisasi. Mock tidak boleh membawa Grad-CAM berstatus AVAILABLE. Visualisasi menunjukkan sensitivitas model, bukan segmentasi lesi.
+
+## Status perangkat
+
+`GET /api/devices` dan `POST /api/devices/:deviceId/status` menyediakan telemetri HTTP. Lihat [kontrak perangkat](devices.md) untuk field upload, heartbeat, dan cara menangani timeout. Belum ada transport MQTT.
+
+## Penyimpanan database
 
 Tanpa `DATABASE_URL`, backend memakai SQLite bawaan Node: patients(patientId PK, createdAt), examinations(examinationId PK, patientId FK, document JSON), fundus_images(imageId PK, examinationId FK, document JSON), ai_results(examinationId PK/FK, document JSON). Jika `DATABASE_URL` berisi URI MongoDB, backend memakai koleksi `patients`, `examinations`, `fundus_images`, dan `ai_results` pada database `DATABASE_NAME` (default `ai_fundus`). Perubahan satu examination disimpan dalam transaksi. File original tetap berada di `UPLOAD_DIR`; database hanya menyimpan metadata dan referensi path.
+
+## Hapus riwayat pemeriksaan
+
+`DELETE /api/examinations/:id` menghapus satu pemeriksaan beserta record gambar dan hasil AI dalam transaksi SQLite atau MongoDB. File original, processed, Grad-CAM, dan heatmap kemudian dibersihkan dari `UPLOAD_DIR`. Data pasien dan pemeriksaan lain tetap tersimpan. Respons 200 berisi `deleted`, `examinationId`, dan `filesRemoved`. Jika `filesRemoved` bernilai false, riwayat sudah terhapus tetapi sebagian file perlu dibersihkan kembali. Status 409 berarti pemeriksaan sedang diproses, dan 404 berarti pemeriksaan tidak ditemukan. Antarmuka meminta konfirmasi karena penghapusan permanen. PDF yang telah diunduh sebelumnya tidak ikut dihapus.
+
+## Unduh PDF
+
+`GET /api/examinations/:id/report` mengunduh PDF untuk status COMPLETED. Respons berupa `application/pdf` dengan attachment dan `Cache-Control: private, no-store`. Status 409 berarti pemeriksaan belum selesai, 404 jika tidak ditemukan, dan 500 REPORT_FAILED jika generator gagal. Hasil pemeriksaan tidak diubah oleh kegagalan ekspor. Backend memakai ReportLab melalui `REPORT_PYTHON`, `PYTHON`, atau `python` di PATH. Grad-CAM yang tersedia disertakan, sedangkan pemeriksaan lama memakai placeholder.

@@ -52,7 +52,17 @@ export function createSqliteStore(path) {
     db.prepare('INSERT OR IGNORE INTO patients VALUES (?,?)').run(patient.patientId, patient.createdAt);
     return db.prepare('SELECT patientId, createdAt FROM patients WHERE patientId=?').get(patient.patientId);
   };
-  return { get, save, listExaminations, listPatients, savePatient, close: () => db.close() };
+  function deleteExamination(id) {
+    db.exec('BEGIN');
+    try {
+      db.prepare('DELETE FROM ai_results WHERE examinationId=?').run(id);
+      db.prepare('DELETE FROM fundus_images WHERE examinationId=?').run(id);
+      const deleted = db.prepare('DELETE FROM examinations WHERE examinationId=?').run(id).changes > 0;
+      db.exec('COMMIT');
+      return deleted;
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
+  }
+  return { get, save, listExaminations, listPatients, savePatient, deleteExamination, close: () => db.close() };
 }
 
 export const createStore = createSqliteStore;
@@ -126,5 +136,15 @@ export async function createMongoStore(url, databaseName = 'ai_fundus') {
     const saved = await patients.findOne({ _id: patient.patientId });
     return { patientId: saved._id, createdAt: saved.createdAt };
   };
-  return { type: 'mongodb', get, save, listExaminations, listPatients, savePatient, close: () => client.close() };
+  async function deleteExamination(id) {
+    const session = client.startSession();
+    try {
+      return await session.withTransaction(async () => {
+        await aiResults.deleteOne({ _id: id }, { session });
+        await fundusImages.deleteMany({ examinationId: id }, { session });
+        return (await examinations.deleteOne({ _id: id }, { session })).deletedCount > 0;
+      });
+    } finally { await session.endSession(); }
+  }
+  return { type: 'mongodb', get, save, listExaminations, listPatients, savePatient, deleteExamination, close: () => client.close() };
 }

@@ -1,5 +1,6 @@
 """Prediction adapters for explicit mock and TensorFlow model modes."""
 import os
+import logging
 from pathlib import Path
 from threading import Lock
 
@@ -54,6 +55,7 @@ class TensorFlowModelAdapter:
         self.error_code = "MODEL_NOT_READY"
         self.model_version = None
         self.model = None
+        self.gradcam = None
         self.lock = Lock()
         self.model_path = Path(model_path).expanduser().resolve()
         self.model_class_names = tuple(model_class_names or DEFAULT_MODEL_CLASSES)
@@ -84,9 +86,22 @@ class TensorFlowModelAdapter:
             output = self.model(batch, training=False)
         values = np.asarray(output, dtype=np.float64).reshape(-1).tolist()
         prediction, probabilities = map_probabilities(values, self.model_class_names)
-        return {"success": True, "isMock": False, "prediction": prediction,
+        result = {"success": True, "isMock": False, "prediction": prediction,
                 "probabilities": probabilities, "riskLevel": _risk_level(prediction["class"]),
                 "modelVersion": self.model_version}
+        try:
+            from .gradcam import GradCAM
+            with self.lock:
+                if self.gradcam is None:
+                    self.gradcam = GradCAM(self.model)
+                index = [canonical_label(name) for name in self.model_class_names].index(prediction["class"])
+                result["explanation"] = self.gradcam.explain(batch, processed, index, prediction["class"])
+        except Exception as error:
+            # A failed explanation must not masquerade as a heatmap or erase a valid prediction.
+            logging.getLogger(__name__).warning('Grad-CAM unavailable (%s)', type(error).__name__)
+            result["explanation"] = {"status": "UNAVAILABLE", "method": "Grad-CAM",
+                                     "version": "gradcam-v1", "reason": "EXPLANATION_FAILED"}
+        return result
 
 
 def create_adapter(mode, model_path=None, model_version=None, model_class_names=None):

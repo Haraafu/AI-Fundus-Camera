@@ -99,7 +99,17 @@ Aturan risiko di `apps/backend/src/risk.js` terpisah dari inference. UI menampil
 
 Validasi MVP: 10/10 tes Node lulus. Smoke test dengan model aktual dan MongoDB Atlas menghasilkan examination COMPLETED, `isMock=false`, confidence/probabilitas, metadata gambar dan versi aturan yang dapat dibaca kembali. Halaman dashboard dan hasil diverifikasi di browser dengan gambar original dan processed. Identitas sample uji adalah `DEMO-001` dan gambar berasal dari dataset lokal.
 
-## Mengganti checkpoint
+## Grad-CAM dan alur perangkat
+
+Checkpoint APTOS aktif mendukung Grad-CAM pada `efficientnetb3/top_conv`. Implementasi menggunakan fitur konvolusi dan head ordinal yang sama dengan prediksi, lalu menghitung gradien probabilitas kelas terpilih. Aktivasi positif dinormalisasi per citra dan ditampilkan pada ruang koordinat hasil prapemrosesan. Lapisan backbone yang frozen tetap dapat dijelaskan karena input diawasi oleh gradient tape.
+
+Backend menyimpan overlay dan heatmap secara terpisah dengan checksum, sementara metadata penjelasan dicatat bersama hasil model. Hasil lama tidak diubah. Grad-CAM yang gagal diberi status UNAVAILABLE, tanpa mengganti prediksi aktual dengan mock.
+
+Validasi tambahan: 12/12 tes backend, 10/10 tes layanan AI, dan 2/2 tes Grad-CAM lulus. Uji Grad-CAM memakai model kecil dengan aktivasi spasial yang diketahui untuk membuktikan bahwa perubahan kelas target mengubah peta dan gradien nol tidak menghasilkan peta palsu. Smoke test checkpoint aktual dengan klien ESP32-SIM menghasilkan COMPLETED dan Grad-CAM AVAILABLE pada SQLite serta MongoDB Atlas. Metadata device ID dan waktu capture ikut tersimpan. Uji ini menggunakan citra dataset, bukan kamera fisik.
+
+Perintah dan urutan rekaman tersedia pada [panduan demo](demo.md). PDF ditangani anggota tim lain dan tidak diubah dalam implementasi ini. MQTT dan pengujian kamera fisik tetap merupakan pekerjaan lanjutan.
+
+## Prosedur mengganti checkpoint
 
 1. Verifikasi checksum, input shape, output shape, urutan kelas, preprocessing, dan versi runtime model baru.
 2. Ubah `MODEL_PATH`, `MODEL_VERSION`, dan `MODEL_CLASS_NAMES` di `.env`.

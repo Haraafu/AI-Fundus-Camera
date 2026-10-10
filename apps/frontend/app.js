@@ -13,7 +13,7 @@ function errorBox(error) { return `<div class="error" role="alert">${escape(erro
 function heading(title, subtitle, action = '') { return `<div class="page-head"><div><div class="eyebrow">FUNDUS SCREENING</div><h1>${escape(title)}</h1><p>${escape(subtitle)}</p></div>${action}</div>`; }
 function examTable(exams) {
   if (!exams.length) return '<div class="empty">Belum ada pemeriksaan. Mulai dengan menambahkan pasien atau pemeriksaan baru.</div>';
-  return `<div class="scroll"><table><thead><tr><th>PASIEN</th><th>WAKTU</th><th>MATA</th><th>STATUS</th><th>HASIL / RISIKO</th><th></th></tr></thead><tbody>${exams.map(e => `<tr><td><a href="/patients/${encodeURIComponent(e.patientId)}">${escape(e.patientId)}</a></td><td>${escape(date(e.createdAt))}</td><td>${e.eye === 'LEFT' ? 'Kiri' : 'Kanan'}</td><td>${badge(e.status)}</td><td>${e.result ? `${escape(labels[e.result.predictedClass])} ${badge(e.result.riskLevel)}${e.result.isMock ? ' · MOCK' : ''}` : '—'}</td><td><a href="/examinations/${encodeURIComponent(e.examinationId)}">Lihat →</a></td></tr>`).join('')}</tbody></table></div>`;
+  return `<div class="scroll"><table><thead><tr><th>PASIEN</th><th>WAKTU</th><th>MATA</th><th>STATUS</th><th>HASIL / RISIKO</th><th></th></tr></thead><tbody>${exams.map(e => `<tr><td><a href="/patients/${encodeURIComponent(e.patientId)}">${escape(e.patientId)}</a></td><td>${escape(date(e.createdAt))}</td><td>${e.eye === 'LEFT' ? 'Kiri' : 'Kanan'}</td><td>${badge(e.status)}</td><td>${e.result ? `${escape(labels[e.result.predictedClass])} ${badge(e.result.riskLevel)}${e.result.isMock ? ' · MOCK' : ''}` : '—'}</td><td><div class="row-actions"><a href="/examinations/${encodeURIComponent(e.examinationId)}">Lihat →</a><button type="button" class="danger compact" data-delete-exam="${escape(e.examinationId)}" data-patient="${escape(e.patientId)}" ${["IMAGE_RECEIVED", "PROCESSING"].includes(e.status) ? "disabled" : ""}>Hapus</button></div></td></tr>`).join('')}</tbody></table></div>`;
 }
 async function dashboard() {
   const exams = await api('/api/examinations');
@@ -61,6 +61,9 @@ async function newExamination() {
     button.disabled = true;
     let exam;
     try {
+      status.innerHTML = '<div class="notice">Memeriksa kesiapan layanan AI…</div>';
+      const system = await api('/api/system');
+      if (!system.aiReady) throw new Error('Layanan AI belum siap. Pastikan layanan model berjalan, lalu coba lagi. Pemeriksaan belum dibuat.');
       status.innerHTML = '<div class="notice">Membuat pemeriksaan…</div>';
       exam = await api('/api/examinations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ patientId: document.querySelector('#patient').value.trim(), eye: document.querySelector('#eye').value, captureType: document.querySelector('#capture').value }) });
       status.innerHTML = '<div class="notice">Foto sedang diproses dan dianalisis. Tunggu sampai hasil tersedia.</div>';
@@ -74,15 +77,41 @@ async function newExamination() {
     }
   });
 }
+function explanationPanel(exam, id) {
+  const cam = exam.result?.explanation;
+  if (!exam.result) return '';
+  if (cam?.status !== 'AVAILABLE') return `<section class="panel"><h2>Visualisasi Grad-CAM</h2><p>${exam.result.isMock ? 'Grad-CAM tidak dibuat untuk prediksi mock.' : 'Visualisasi tidak tersedia untuk pemeriksaan ini. Jalankan pemeriksaan baru untuk menghasilkan Grad-CAM.'}</p></section>`;
+  return `<section class="panel"><div class="panel-head"><h2>Visualisasi Grad-CAM</h2><span class="badge LOW">${escape(cam.targetClass)}</span></div><div class="image-grid"><figure><img src="/api/examinations/${encodeURIComponent(id)}/images/gradcam" alt="Overlay Grad-CAM pada citra hasil prapemrosesan"><figcaption>Overlay perhatian model</figcaption></figure><figure><img src="/api/examinations/${encodeURIComponent(id)}/images/heatmap" alt="Peta aktivasi Grad-CAM"><figcaption>Aktivasi rendah (biru) hingga tinggi (merah)</figcaption></figure></div><p class="help">Peta ini menunjukkan kontribusi relatif area citra terhadap kelas yang diprediksi. Bukan penanda lesi atau konfirmasi diagnosis. Koordinat mengikuti citra hasil prapemrosesan.</p><details><summary>Detail metode</summary><p class="help">${escape(cam.method)} · ${escape(cam.version)} · ${escape(cam.layer)}</p></details></section>`;
+}
+async function devicesPage() {
+  const devices = await api('/api/devices');
+  main.innerHTML = heading('Perangkat', 'Pantau koneksi kamera dan pengiriman citra melalui jaringan lokal.') +
+    `<div class="notice">ESP32-SIM menandai klien simulasi. Status dianggap aktif selama 60 detik sejak pembaruan terakhir.</div>` +
+    (devices.length ? devices.map(d => `<section class="panel"><div class="panel-head"><h2>${escape(d.deviceId)}</h2>${badge(d.status)}</div><p>${d.isOnline ? 'Terhubung' : 'Tidak aktif'} · Pembaruan terakhir ${escape(date(d.lastSeen))}</p>${d.message ? errorBox(new Error(d.message)) : ''}${d.examinationId ? `<a class="button secondary" href="/examinations/${encodeURIComponent(d.examinationId)}">Lihat pemeriksaan</a>` : ''}<ol class="timeline">${d.statusHistory.map(s => `<li>${escape(s.status)}<time>${escape(date(s.timestamp))}</time></li>`).join('')}</ol></section>`).join('') : '<section class="panel empty">Belum ada perangkat yang mengirim status. Jalankan klien simulasi atau hubungkan kamera.</section>');
+  setTimeout(() => { if (location.pathname === '/devices') devicesPage().catch(error => { main.innerHTML = errorBox(error); }); }, 5000);
+}
 async function examination(id) {
   const exam = await api(`/api/examinations/${encodeURIComponent(id)}`), result = exam.result;
   main.innerHTML = heading('Hasil pemeriksaan', `${exam.patientId} · Mata ${exam.eye === 'LEFT' ? 'kiri' : 'kanan'} · ${date(exam.createdAt)}`, `<a class="button secondary" href="/patients/${encodeURIComponent(exam.patientId)}">Riwayat pasien</a>`) + `<div class="notice">Status ${badge(exam.status)} · ${escape(exam.captureType)}${result?.isMock ? ' · Hasil MOCK: prediksi dummy untuk pengujian.' : ''}</div>` + (exam.error ? errorBox(new Error(`${exam.error.code}: ${exam.error.message}`)) : '') + `<div class="results"><div><section class="panel"><h2>Citra fundus</h2>${exam.image ? `<div class="image-grid"><figure><img src="/api/examinations/${encodeURIComponent(id)}/images/original" alt="Citra fundus original"><figcaption>Original · ${escape(exam.image.originalResolution.join(' × '))}</figcaption></figure>${exam.image.processedPath ? `<figure><img src="/api/examinations/${encodeURIComponent(id)}/images/processed" alt="Citra fundus setelah preprocessing"><figcaption>Processed · 300 × 300</figcaption></figure>` : ''}</div>` : '<div class="empty">Gambar belum diunggah.</div>'}</section><section class="panel"><h2>Riwayat status</h2><ol class="timeline">${exam.statusHistory.map(s => `<li>${escape(s.status)}<time>${escape(date(s.timestamp))}</time></li>`).join('')}</ol></section></div><div><section class="panel"><div class="eyebrow">AI SCREENING</div>${result ? `<div class="prediction">${escape(labels[result.predictedClass])}</div><div class="meta"><div><span>Confidence</span><b>${(result.confidence * 100).toFixed(1)}%</b></div><div><span>Kategori risiko</span>${badge(result.riskLevel)}</div></div>${Object.entries(result.probabilities).map(([name, probability]) => `<div class="probability"><div><span>${escape(labels[name])}</span><b>${(probability * 100).toFixed(1)}%</b></div><div class="bar"><i style="width:${probability * 100}%"></i></div></div>`).join('')}<div class="notice">${result.isMock ? 'Prediksi dummy untuk pengujian integrasi.' : 'Prediksi model aktual. Tinjau bersama tenaga medis.'} Kategori risiko mengikuti kelas DR dengan aturan ${escape(result.riskRuleVersion || 'legacy')}.</div>` : '<div class="empty">Hasil belum tersedia.</div>'}</section><section class="panel"><h2>Metadata</h2><div class="meta"><div><span>Examination ID</span><b>${escape(id)}</b></div><div><span>Model</span><b>${escape(result?.modelVersion || '—')}</b></div><div><span>Preprocessing</span><b>${escape(exam.image?.preprocessingVersion || '—')}</b></div><div><span>Selesai</span><b>${escape(date(exam.completedAt))}</b></div></div></section>${exam.status === 'CREATED' || exam.status === 'FAILED' ? `<a class="button" href="/examinations/new?patientId=${encodeURIComponent(exam.patientId)}">Pemeriksaan baru</a>` : ''}</div></div>`;
+  if (!['IMAGE_RECEIVED', 'PROCESSING'].includes(exam.status)) {
+    main.querySelector('.page-head').insertAdjacentHTML('beforeend', `<button type="button" class="danger" data-delete-exam="${escape(id)}" data-patient="${escape(exam.patientId)}">Hapus pemeriksaan</button>`);
+  }
+  if (exam.status === 'COMPLETED' && result) {
+    main.querySelector('.page-head').insertAdjacentHTML('beforeend', `<a class="button" href="/api/examinations/${encodeURIComponent(id)}/report" download="report-${escape(id)}.pdf">Unduh PDF</a>`);
+  }
+  main.querySelector('.results > div > .panel')?.insertAdjacentHTML('afterend', explanationPanel(exam, id));
+  if (result && result.confidence < 0.6) main.querySelector('.results > div:nth-child(2) > .panel')?.insertAdjacentHTML('beforeend', '<div class="notice uncertainty">Probabilitas kelas tertinggi masih di bawah 60%. Hasil perlu ditinjau, dan tidak boleh digunakan sebagai keputusan medis mandiri.</div>');
+  if (exam.image) main.querySelector('.results > div:nth-child(2) .meta:last-child')?.insertAdjacentHTML('beforeend', `<div><span>Perangkat</span><b>${escape(exam.image.deviceId || 'Upload manual')}</b></div><div><span>Waktu analisis</span><b>${result?.inferenceTimeMs !== undefined ? (result.inferenceTimeMs / 1000).toFixed(2) + ' detik' : 'Tidak tercatat'}</b></div>`);
   if (['IMAGE_RECEIVED', 'PROCESSING'].includes(exam.status)) setTimeout(() => examination(id).catch(error => { main.innerHTML = errorBox(error); }), 2000);
 }
 async function init() {
+  if (location.pathname === '/devices') {
+    location.replace('/dashboard');
+    return;
+  }
   try {
     const system = await api('/api/system');
-    document.querySelector('#system').textContent = `${system.storage.toUpperCase()} · ${system.aiMode === 'model' ? 'Model aktual' : 'MOCK'}`;
+    document.querySelector('#system').textContent = `${system.aiMode === 'model' ? 'Model aktual' : 'MOCK'} · ${system.aiReady ? 'Siap' : 'AI belum siap'}`;
     const path = location.pathname;
     const section = path.startsWith('/patients') ? 'patients' : path.startsWith('/examinations') ? 'examinations' : 'dashboard';
     document.querySelector(`[data-nav="${section}"]`).classList.add('active');
@@ -93,4 +122,17 @@ async function init() {
     else await dashboard();
   } catch (error) { main.innerHTML = heading('Tidak dapat memuat halaman', 'Periksa koneksi backend dan coba lagi.') + errorBox(error) + '<button onclick="location.reload()">Coba lagi</button>'; }
 }
+main.addEventListener('click', async event => {
+  const button = event.target.closest('[data-delete-exam]');
+  if (!button || button.disabled) return;
+  const id = button.dataset.deleteExam;
+  if (!confirm(`Hapus pemeriksaan pasien ${button.dataset.patient} (${id})? Foto dan hasil AI pemeriksaan ini akan dihapus permanen. Data pasien tetap tersimpan.`)) return;
+  button.disabled = true;
+  try {
+    const result = await api(`/api/examinations/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (!result.filesRemoved) alert('Riwayat telah dihapus, tetapi sebagian file gambar gagal dibersihkan.');
+    if (location.pathname.startsWith('/examinations/')) location.href = `/patients/${encodeURIComponent(button.dataset.patient)}`;
+    else await init();
+  } catch (error) { alert(error.message); button.disabled = false; }
+});
 init();

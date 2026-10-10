@@ -19,6 +19,8 @@ The repository provides the following working components:
 - Integration tests covering successful requests, validation failures, AI failures, timeouts, concurrent uploads, persistence, and corrupted images.
 - A smoke-test script for exercising the local backend with a dataset image.
 - A frontend MVP with dashboard, patient history, examination upload, original/processed images, and model results.
+- Class-specific Grad-CAM overlays and activation maps from the actual integrated checkpoint, with explicit unavailable status when an explanation cannot be generated.
+- An HTTP camera contract, a device-status page, and a simulated camera client. See [device interface](docs/devices.md) and [demo guide](docs/demo.md).
 
 ## System Flow
 
@@ -271,7 +273,8 @@ Generated datasets, model files, SQLite databases, uploads, virtual environments
 
 - The checked-in environment template defaults to deterministic mock data; real inference requires `AI_MODE=model` and an available checkpoint.
 - The integrated checkpoint is a research model trained on APTOS data. Its current evaluation is documented in [docs/training.md](docs/training.md); it is not a clinically validated diagnostic model.
-- The repository does not provide a clinical image-quality gate, Grad-CAM visualisation, PDF reporting workflow, or hardware/MQTT communication layer.
+- The repository does not provide a clinical image-quality gate, MQTT transport, or verified physical-camera integration.
+- Grad-CAM describes model sensitivity on the processed image; it is not a validated lesion segmentation or clinical explanation.
 - The backend is designed for local development and does not provide production authentication, HTTPS, or deployment configuration.
 - SQLite usage is intended for a local backend instance rather than a multi-instance production deployment.
 - Results are preliminary research output and require review by qualified healthcare professionals.
@@ -279,3 +282,7 @@ Generated datasets, model files, SQLite databases, uploads, virtual environments
 ## License and Use
 
 This project is an educational and research prototype. Review the repository's project materials and dataset terms before redistributing code, images, or trained models.
+
+### PDF reports
+
+The reporting CLI from branch `Report` is integrated with completed examinations. Install `python -m pip install -r services/pdf_generator/requirement.txt` and click **Unduh PDF** on the result page. The report includes the stored prediction, probabilities, processed image, available Grad-CAM overlay, and model provenance. Set `REPORT_PYTHON` if the generator requires a different Python interpreter. See [demo guide](docs/demo.md).

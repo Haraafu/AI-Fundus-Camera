@@ -44,8 +44,8 @@ def get_9_risk_categories_table(risk_list):
     ]
 
     if not risk_list:
-        p_note = Paragraph("<i>Analisis Biomarker & Pembuluh Darah (CRAE/CRVE/AVR) terjadwal pada Rilis P2/P3.</i>", styles['Normal'])
-        data.append([p_note, "-", "Masih pending"])
+        p_note = Paragraph("<i>CRAE/CRVE/AVR memerlukan penandaan pembuluh pada foto asli.</i>", styles['Normal'])
+        data.append([p_note, "Belum diukur", "Belum diukur"])
         style_commands.append(('BACKGROUND', (2, 1), (2, 1), colors.HexColor("#7f8c8d")))
         style_commands.append(('ALIGN', (2, 1), (2, 1), 'CENTER'))
         t = Table(data, colWidths=[200, 180, 100])
@@ -63,6 +63,8 @@ def get_9_risk_categories_table(risk_list):
             color = colors.HexColor("#27ae60") # Hijau
         elif status_text == "Warning":
             color = colors.HexColor("#f39c12") # Kuning/Amber
+        elif status_text == "Belum divalidasi":
+            color = colors.HexColor("#64748b")
         else:
             color = colors.HexColor("#c0392b") # Merah (Positive/Abnormal/High)
             

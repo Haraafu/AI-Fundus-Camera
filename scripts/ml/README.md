@@ -12,3 +12,5 @@ Jalankan seluruh perintah dari root repository.
 | `train_efficientnetb3_legacy.py` | Workflow fine-tuning lama untuk reproduksi dan perbandingan. |
 
 Dataset, cache embedding, laporan JSON, dan checkpoint disimpan di folder yang sudah diabaikan Git. Ringkasan hasil ada di [docs/training.md](../../docs/training.md).
+
+EyePACS V2: `train_eyepacs_v2.py` trains with mixed balanced sampling and validation macro F1 selection. `kaggle_eyepacs_v2.py` is its self-contained Kaggle GPU entry point. `test_train_eyepacs_v2.py` checks metrics, sampling, patient leakage rejection, and two-phase checkpoint export. See the experiment description in `docs/training.md`.

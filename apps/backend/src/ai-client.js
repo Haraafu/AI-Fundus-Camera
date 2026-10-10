@@ -6,6 +6,30 @@ const PREPROCESSING_VERSION = 'fundus-prep-v1';
 export class ApiError extends Error {
   constructor(status, code, message) { super(message); this.status = status; this.code = code; }
 }
+async function explanationOutput(value, targetClass) {
+  if (!value) return { metadata: { status: 'UNAVAILABLE', reason: 'NOT_PROVIDED' } };
+  const invalid = () => new ApiError(502, 'INVALID_AI_RESPONSE', 'AI explanation does not match the contract.');
+  if (!['AVAILABLE', 'UNAVAILABLE'].includes(value.status) || value.method !== 'Grad-CAM' || value.version !== 'gradcam-v1') throw invalid();
+  if (value.status === 'UNAVAILABLE') return { metadata: { status: value.status, method: value.method, version: value.version, reason: value.reason || 'EXPLANATION_FAILED' } };
+  if (value.targetClass !== targetClass || value.coordinateSpace !== 'processed' || value.mimeType !== 'image/png' ||
+      typeof value.layer !== 'string' || JSON.stringify(value.outputResolution) !== '[300,300]') throw invalid();
+  const images = {};
+  for (const [key, field] of [['overlay', 'imageBase64'], ['heatmap', 'heatmapBase64']]) {
+    const encoded = value[field];
+    if (typeof encoded !== 'string' || !encoded.length || encoded.length > 500000) throw invalid();
+    const bytes = Buffer.from(encoded, 'base64');
+    if (bytes.toString('base64') !== encoded) throw invalid();
+    try {
+      const image = sharp(bytes, { limitInputPixels: 90000, failOn: 'warning' });
+      const m = await image.metadata();
+      if (m.format !== 'png' || m.width !== 300 || m.height !== 300 || (m.pages ?? 1) !== 1) throw invalid();
+      await image.stats();
+    } catch { throw invalid(); }
+    images[key] = bytes;
+  }
+  return { metadata: { status: value.status, method: value.method, version: value.version, targetClass,
+    coordinateSpace: value.coordinateSpace, layer: value.layer, outputResolution: value.outputResolution }, ...images };
+}
 export async function predict(config, buffer, mime) {
   const body = new FormData();
   body.append('image', new Blob([buffer], { type: mime }), mime === 'image/png' ? 'fundus.png' : 'fundus.jpg');
@@ -49,8 +73,10 @@ export async function predict(config, buffer, mime) {
   } catch {
     throw new ApiError(502, 'INVALID_AI_RESPONSE', 'AI preprocessing output does not match the contract.');
   }
-  return { result: { predictedClass: result.prediction.class, confidence: result.prediction.confidence,
+  if (result.isMock && result.explanation?.status === 'AVAILABLE') throw new ApiError(502, 'INVALID_AI_RESPONSE', 'Mock predictions cannot carry real Grad-CAM.');
+  const explanation = await explanationOutput(result.explanation, result.prediction.class);
+  return { explanation, result: { predictedClass: result.prediction.class, confidence: result.prediction.confidence,
       probabilities: p, ...scoreRisk(result.prediction.class), modelVersion: result.modelVersion, isMock: result.isMock,
-      preprocessingVersion: result.preprocessingVersion },
+      preprocessingVersion: result.preprocessingVersion, explanation: explanation.metadata },
     processedBytes, preprocessing: { version: prep.version, parameters: prep.parameters, outputResolution: prep.outputResolution } };
 }

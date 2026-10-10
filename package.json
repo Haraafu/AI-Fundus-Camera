@@ -9,7 +9,9 @@
   "scripts": {
     "backend": "node apps/backend/src/server.js",
     "test": "node --test --test-concurrency=1 apps/backend/test/*.test.js",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "device:mock": "node scripts/mock-device.mjs",
+    "demo": "node scripts/demo.mjs"
   },
   "dependencies": {
     "dotenv": "^17.2.0",

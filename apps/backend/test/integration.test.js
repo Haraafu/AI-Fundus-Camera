@@ -1,6 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -50,6 +51,7 @@ async function fixture(t, overrides = {}) {
 test('both health endpoints and real Python mock upload; bytes preserved and result persists', async t => {
   const f = await fixture(t);
   assert.equal((await f.request('/health')).status, 200);
+  assert.equal((await f.request('/api/system')).body.aiReady, true);
   assert.equal((await (await fetch(aiUrl + '/health')).json()).modelLoaded, false);
   const exam = await f.create();
   const r = await f.upload(exam.examinationId);
@@ -69,6 +71,56 @@ test('both health endpoints and real Python mock upload; bytes preserved and res
   assert.deepEqual(await other.store.get(exam.examinationId), r.body); await other.store.close();
   assert.equal((await f.upload(exam.examinationId)).status, 409);
 });
+test('device statuses validate references and uploads preserve camera metadata', async t => {
+  const f = await fixture(t), exam = await f.create();
+  const endpoint = '/api/devices/ESP32-SIM-01/status';
+  const post = body => f.request(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  assert.equal((await post({ status: 'BOGUS' })).status, 400);
+  assert.equal((await post({ status: 'UPLOADING', examinationId: 'missing' })).status, 400);
+  for (const status of ['IDLE', 'READY', 'CAPTURING', 'UPLOADING']) {
+    assert.equal((await post({ status, examinationId: exam.examinationId })).status, 200);
+  }
+  const timestamp = new Date().toISOString();
+  const result = await f.upload(exam.examinationId, png, 'image/png', { device_id: 'ESP32-SIM-01', capture_timestamp: timestamp });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.image.deviceId, 'ESP32-SIM-01');
+  assert.equal(result.body.image.capturedAt, timestamp);
+  const device = (await f.request('/api/devices')).body[0];
+  assert.equal(device.isOnline, true);
+  assert.deepEqual(device.statusHistory.map(s => s.status), ['IDLE', 'READY', 'CAPTURING', 'UPLOADING']);
+  await post({ status: 'UPLOADING', examinationId: exam.examinationId });
+  assert.equal((await f.request('/api/devices')).body[0].statusHistory.length, 4);
+  assert.equal((await fetch(f.base + '/devices')).status, 200);
+  assert.equal((await post({ status: 'ERROR', message: 'Camera capture failed' })).status, 200);
+  assert.equal((await f.request('/api/devices')).body[0].message, 'Camera capture failed');
+});
+
+test('real explanation images persist without base64 and reject a mismatched class', async t => {
+  const form = new FormData(); form.append('image', new Blob([png], { type: 'image/png' }), 'test.png');
+  const sample = await (await fetch(aiUrl + '/predict', { method: 'POST', body: form })).json();
+  const processed = sample.preprocessing.imageBase64;
+  let targetClass = 'Moderate';
+  const upstream = createServer((req, res) => { req.resume(); res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({
+    ...sample, isMock: false, modelVersion: 'fixture-model-v1', explanation: { status: 'AVAILABLE', method: 'Grad-CAM',
+      version: 'gradcam-v1', targetClass, coordinateSpace: 'processed', layer: 'test/top_conv', outputResolution: [300, 300],
+      mimeType: 'image/png', imageBase64: processed, heatmapBase64: processed }
+  })); });
+  const url = await listen(upstream);
+  t.after(() => { upstream.closeAllConnections(); upstream.close(); });
+  const f = await fixture(t, { aiMode: 'model', aiUrl: url });
+  const exam = await f.create(), result = await f.upload(exam.examinationId);
+  assert.equal(result.status, 200);
+  assert.equal(result.body.result.explanation.status, 'AVAILABLE');
+  assert.equal(JSON.stringify(result.body).includes('imageBase64'), false);
+  assert.match(result.body.image.gradcamSha256, /^[a-f0-9]{64}$/);
+  const image = await fetch(`${f.base}/api/examinations/${exam.examinationId}/images/gradcam`);
+  assert.equal(image.status, 200);
+  assert.deepEqual(Buffer.from(await image.arrayBuffer()), Buffer.from(processed, 'base64'));
+  targetClass = 'Severe';
+  const other = await f.create();
+  assert.equal((await f.upload(other.examinationId)).body.error.code, 'INVALID_AI_RESPONSE');
+});
+
 test('invalid metadata, missing file, unknown ID, spoofed image, oversized image', async t => {
   const f = await fixture(t, { maxUploadBytes: png.length + 10 });
   assert.equal((await f.request('/api/examinations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 400);
@@ -83,6 +135,7 @@ test('invalid metadata, missing file, unknown ID, spoofed image, oversized image
 });
 test('AI unavailable records FAILED and preserves original', async t => {
   const f = await fixture(t, { aiUrl: 'http://127.0.0.1:1' });
+  assert.equal((await f.request('/api/system')).body.aiReady, false);
   const e = await f.create(), r = await f.upload(e.examinationId);
   assert.equal(r.status, 502);
   const saved = await f.store.get(e.examinationId);
@@ -104,6 +157,36 @@ test('concurrent uploads allow only one inference', async t => {
   const f = await fixture(t), e = await f.create();
   const results = await Promise.all([f.upload(e.examinationId), f.upload(e.examinationId)]);
   assert.deepEqual(results.map(r => r.status).sort(), [200, 409]);
+});
+test('delete examination removes child records and images, preserves patient and other examinations', async t => {
+  const f = await fixture(t), exam = await f.create(), other = await f.create();
+  const completed = (await f.upload(exam.examinationId)).body;
+  const untouched = join(f.config.uploadDir, 'unrelated.png'); writeFileSync(untouched, png);
+  const response = await f.request(`/api/examinations/${exam.examinationId}`, { method: 'DELETE' });
+  assert.equal(response.status, 200); assert.equal(response.body.filesRemoved, true);
+  assert.equal((await f.request(`/api/examinations/${exam.examinationId}`)).status, 404);
+  assert.equal((await fetch(`${f.base}/api/examinations/${exam.examinationId}/report`)).status, 404);
+  assert.equal((await f.request(`/api/examinations/${exam.examinationId}`, { method: 'DELETE' })).status, 404);
+  assert.equal(existsSync(join(f.config.uploadDir, completed.image.originalPath)), false);
+  assert.equal(existsSync(join(f.config.uploadDir, completed.image.processedPath)), false);
+  assert.equal(existsSync(untouched), true);
+  assert.equal((await f.request('/api/patients')).body.length, 1);
+  assert.equal((await f.request('/api/examinations')).body[0].examinationId, other.examinationId);
+  const db = new DatabaseSync(f.config.databasePath);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM fundus_images WHERE examinationId=?').get(exam.examinationId).n, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ai_results WHERE examinationId=?').get(exam.examinationId).n, 0);
+  db.close();
+  const reopened = createApp(f.config); assert.equal(reopened.store.get(exam.examinationId), null); reopened.store.close();
+});
+test('delete refuses processing examinations and never unlinks outside upload directory', async t => {
+  const f = await fixture(t), exam = await f.create();
+  exam.status = 'PROCESSING'; await f.store.save(exam);
+  assert.equal((await f.request(`/api/examinations/${exam.examinationId}`, { method: 'DELETE' })).status, 409);
+  const outside = join(f.config.uploadDir, '..', 'keep.txt'); writeFileSync(outside, 'keep');
+  exam.status = 'FAILED'; exam.image = { imageId: 'test', originalPath: '../keep.txt', processedPath: 'missing.png' };
+  await f.store.save(exam);
+  assert.equal((await f.request(`/api/examinations/${exam.examinationId}`, { method: 'DELETE' })).status, 200);
+  assert.equal(existsSync(outside), true);
 });
 test('Python rejects corrupt uploads directly', async () => {
   const body = new FormData(); body.append('image', new Blob(['invalid'], { type: 'image/png' }), 'bad.png');
@@ -174,4 +257,32 @@ test('invalid preprocessing, null response and a mock/model mode mismatch are re
     assert.equal((await f.store.get(exam.examinationId)).error.code, 'INVALID_AI_RESPONSE');
     assert.equal((await f.store.get(exam.examinationId)).result, null);
   }
+});
+
+test('PDF export uses current result and real generator; incomplete and Python failure are handled', async t => {
+  const f = await fixture(t, { reportPython: 'python' }), exam = await f.create();
+  const endpoint = `/api/examinations/${exam.examinationId}/report`;
+  assert.equal((await f.request(endpoint)).status, 409);
+  const result = (await f.upload(exam.examinationId)).body;
+  const response = await fetch(f.base + endpoint);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-type'), 'application/pdf');
+  assert.match(response.headers.get('content-disposition'), /attachment; filename="report-/);
+  assert.equal(response.headers.get('cache-control'), 'private, no-store');
+  const bytes = Buffer.from(await response.arrayBuffer());
+  assert.equal(bytes.subarray(0, 5).toString(), '%PDF-');
+  assert.ok(bytes.length > 2000);
+  const { toPayload } = await import('../src/report.js');
+  result.result.explanation = { status: 'AVAILABLE' }; result.image.gradcamPath = 'actual-gradcam.png';
+  const payload = toPayload(result, f.config.uploadDir);
+  assert.equal(payload.images.gradcam, resolve(f.config.uploadDir, 'actual-gradcam.png'));
+  assert.equal(payload.provenance.is_mock, true);
+  assert.deepEqual(payload.probabilities, result.result.probabilities);
+  result.image.gradcamPath = '../outside.png';
+  assert.equal(toPayload(result, f.config.uploadDir).images.gradcam, null);
+  const broken = await fixture(t, { reportPython: resolve('missing-python.exe') }), pending = await broken.create();
+  await broken.upload(pending.examinationId);
+  const error = await broken.request(`/api/examinations/${pending.examinationId}/report`);
+  assert.equal(error.status, 500); assert.equal(error.body.error.code, 'REPORT_FAILED');
+  assert.equal((await broken.request(`/api/examinations/${pending.examinationId}`)).body.status, 'COMPLETED');
 });

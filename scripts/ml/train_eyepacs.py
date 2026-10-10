@@ -36,7 +36,7 @@ def dataset(frame, batch_size, training):
     return data.map(load, num_parallel_calls=tf.data.AUTOTUNE).batch(batch_size).prefetch(tf.data.AUTOTUNE).with_options(options)
 
 
-def build_model():
+def build_model(weights="imagenet"):
     augmentation = tf.keras.Sequential(
         [
             tf.keras.layers.RandomFlip("horizontal"),
@@ -47,7 +47,7 @@ def build_model():
         name="augmentation",
     )
     backbone = tf.keras.applications.EfficientNetB3(
-        include_top=False, weights="imagenet", pooling="avg", input_shape=(300, 300, 3)
+        include_top=False, weights=weights, pooling="avg", input_shape=(300, 300, 3)
     )
     backbone.trainable = False
     inputs = tf.keras.Input((300, 300, 3), name="fundus_image")
