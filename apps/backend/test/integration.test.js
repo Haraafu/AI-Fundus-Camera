@@ -12,7 +12,7 @@ import { createApp } from '../src/app.js';
 import { scoreRisk } from '../src/risk.js';
 
 let ai, aiUrl, png;
-const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${server.address().port}`)));
+const listen = (server, host = '127.0.0.1') => new Promise(resolve => server.listen(0, host, () => resolve(`http://127.0.0.1:${server.address().port}`)));
 before(async () => {
   const probe = createServer();
   const url = await listen(probe), port = probe.address().port;
@@ -37,7 +37,7 @@ async function fixture(t, overrides = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'fundus-test-'));
   const config = { databasePath: join(dir, 'db.sqlite'), uploadDir: join(dir, 'uploads'), aiUrl, aiTimeout: 3000, maxUploadBytes: 1024 * 1024, ...overrides };
   const { app, store } = createApp(config);
-  const server = createServer(app), base = await listen(server);
+  const server = createServer(app), base = await listen(server, overrides.testBindHost);
   t.after(async () => { server.closeAllConnections(); await new Promise(r => server.close(r)); await store.close(); rmSync(dir, { recursive: true, force: true }); });
   const request = async (path, options) => { const r = await fetch(base + path, options); return { status: r.status, body: await r.json() }; };
   const create = async () => (await request('/api/examinations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ patientId: 'TEST-001', eye: 'RIGHT', captureType: 'MACULA_CENTERED' }) })).body;
@@ -71,6 +71,50 @@ test('both health endpoints and real Python mock upload; bytes preserved and res
   assert.deepEqual(await other.store.get(exam.examinationId), r.body); await other.store.close();
   assert.equal((await f.upload(exam.examinationId)).status, 409);
 });
+test('device contract matches receiver limits and rejects unknown or timezone-less metadata before accepting an image', async t => {
+  const events = [];
+  const f = await fixture(t, { onDeviceEvent: event => events.push(event) });
+  const contract = (await f.request('/api/device-contract')).body;
+  assert.equal(contract.upload.maxBytes, f.config.maxUploadBytes);
+  assert.equal(contract.upload.fileField, 'image');
+  assert.equal(contract.mqttImplemented, false);
+  const exam = await f.create();
+  for (const fields of [{ deviceId: 'WRONG-FIELD' }, { capture_timestamp: '2026-10-31T09:00:00' }, { device_id: '' }]) {
+    const result = await f.upload(exam.examinationId, png, 'image/png', fields);
+    assert.equal(result.status, 400);
+    assert.equal(result.body.error.code, 'INVALID_METADATA');
+    assert.equal((await f.store.get(exam.examinationId)).status, 'CREATED');
+  }
+  const result = await f.upload(exam.examinationId, png, 'image/png', { device_id: 'CAMERA-01',
+    capture_timestamp: '2026-10-31T09:00:00+07:00', eye: 'RIGHT', capture_type: 'MACULA_CENTERED' });
+  assert.equal(result.status, 200);
+  assert.equal(events.length, 4);
+  assert.equal(events[0].errorCode, 'INVALID_METADATA');
+  assert.equal(events[3].httpStatus, 200);
+  assert.equal(events[3].examinationId, exam.examinationId);
+  assert.match(events[3].requestId, /^[a-f0-9-]{36}$/);
+});
+
+test('hardware simulation CLI sends selected metadata to the receiver bound for LAN without duplicating uploads', async t => {
+  const f = await fixture(t, { testBindHost: '0.0.0.0' });
+  const imagePath = join(f.config.uploadDir, 'simulated-camera.png'); writeFileSync(imagePath, png);
+  const child = spawn(process.execPath, ['scripts/mock-device.mjs', imagePath, 'HW-TEST', 'CAMERA-WIFI-01',
+    '--eye=LEFT', '--capture-type=OPTIC_DISC_CENTERED'], { env: { ...process.env, BACKEND_URL: f.base }, stdio: 'pipe', windowsHide: true });
+  const timer = setTimeout(() => child.kill(), 20000);
+  let stdout = '', stderr = '';
+  child.stdout.on('data', value => { stdout += value; }); child.stderr.on('data', value => { stderr += value; });
+  const code = await new Promise((resolve, reject) => { child.on('exit', resolve); child.on('error', reject); });
+  clearTimeout(timer);
+  assert.equal(code, 0, stderr);
+  assert.match(stdout, /COMPLETED/);
+  const exams = (await f.request('/api/examinations?patientId=HW-TEST')).body;
+  assert.equal(exams.length, 1);
+  assert.equal(exams[0].eye, 'LEFT');
+  assert.equal(exams[0].captureType, 'OPTIC_DISC_CENTERED');
+  assert.equal(exams[0].image.deviceId, 'CAMERA-WIFI-01');
+  assert.equal(exams[0].result.isMock, true);
+});
+
 test('device statuses validate references and uploads preserve camera metadata', async t => {
   const f = await fixture(t), exam = await f.create();
   const endpoint = '/api/devices/ESP32-SIM-01/status';

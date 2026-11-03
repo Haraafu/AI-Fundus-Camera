@@ -19,9 +19,9 @@ CLASS_TO_GRADE = np.array([1, 2, 0, 4, 3], dtype=np.int32)
 SEED = 20261003
 
 
-def dataset(frame, batch_size, training):
+def dataset(frame, batch_size, training, grade_to_class=GRADE_TO_CLASS):
     paths = frame.path.astype(str).to_numpy()
-    labels = GRADE_TO_CLASS[frame["level"].to_numpy(dtype=np.int32)]
+    labels = grade_to_class[frame["level"].to_numpy(dtype=np.int32)]
     data = tf.data.Dataset.from_tensor_slices((paths, labels))
     if training:
         data = data.shuffle(len(frame), seed=SEED, reshuffle_each_iteration=True)
@@ -36,7 +36,7 @@ def dataset(frame, batch_size, training):
     return data.map(load, num_parallel_calls=tf.data.AUTOTUNE).batch(batch_size).prefetch(tf.data.AUTOTUNE).with_options(options)
 
 
-def build_model(weights="imagenet"):
+def build_model(weights="imagenet", num_classes=5):
     augmentation = tf.keras.Sequential(
         [
             tf.keras.layers.RandomFlip("horizontal"),
@@ -53,7 +53,7 @@ def build_model(weights="imagenet"):
     inputs = tf.keras.Input((300, 300, 3), name="fundus_image")
     features = backbone(augmentation(inputs), training=False)
     features = tf.keras.layers.Dropout(0.4)(features)
-    outputs = tf.keras.layers.Dense(5, activation="softmax", dtype="float32", name="classification_output")(features)
+    outputs = tf.keras.layers.Dense(num_classes, activation="softmax", dtype="float32", name="classification_output")(features)
     return tf.keras.Model(inputs, outputs), backbone
 
 

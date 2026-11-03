@@ -8,6 +8,7 @@
   },
   "scripts": {
     "backend": "node apps/backend/src/server.js",
+    "backend:lan": "node scripts/backend-lan.mjs",
     "test": "node --test --test-concurrency=1 apps/backend/test/*.test.js",
     "smoke": "node scripts/smoke.mjs",
     "device:mock": "node scripts/mock-device.mjs",

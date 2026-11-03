@@ -10,6 +10,7 @@ import { createStore } from './store.js';
 import { ApiError, predict } from './ai-client.js';
 
 import { createReportHandler } from './report.js';
+import { deviceContract, UPLOAD_FIELDS, validCaptureTimestamp } from './device-contract.js';
 
 
 export function createApp(config) {
@@ -17,8 +18,20 @@ export function createApp(config) {
   const app = express(), store = config.store ?? createStore(config.databasePath), busy = new Set(), devices = new Map();
   mkdirSync(config.uploadDir, { recursive: true });
   app.disable('x-powered-by');
+  app.use((req, res, next) => {
+    req.requestId = randomUUID();
+    res.set('X-Request-Id', req.requestId);
+    if (req.method === 'POST' && /^\/api\/examinations\/[^/]+\/images$/.test(req.path)) {
+      const started = performance.now();
+      res.on('finish', () => config.onDeviceEvent?.({ event: 'device_upload', requestId: req.requestId,
+        examinationId: req.params.id, httpStatus: res.statusCode, errorCode: res.locals.errorCode || null,
+        durationMs: Math.round(performance.now() - started), timestamp: new Date().toISOString() }));
+    }
+    next();
+  });
   app.use(express.json({ limit: '16kb' }));
   app.get('/health', (req, res) => res.json({ status: 'healthy', service: 'backend' }));
+  app.get('/api/device-contract', (req, res) => res.json(deviceContract(config)));
   app.get('/api/system', async (req, res) => {
     let aiReady = false;
     try {
@@ -126,9 +139,10 @@ export function createApp(config) {
     const exam = req.exam;
     if (!req.file) throw new ApiError(400, 'INVALID_IMAGE', 'Multipart field image is required.');
     const { eye, capture_type: captureType, device_id: deviceId, capture_timestamp: capturedAt } = req.body;
-    if (Object.values(req.body).some(value => typeof value !== 'string') ||
+    if (Object.keys(req.body).some(key => !UPLOAD_FIELDS.includes(key)) ||
+        Object.values(req.body).some(value => typeof value !== 'string' || value.length === 0) ||
         (eye && eye !== exam.eye) || (captureType && captureType !== exam.captureType) ||
-        (deviceId && !/^[A-Za-z0-9_-]{1,64}$/.test(deviceId)) || (capturedAt && !Number.isFinite(Date.parse(capturedAt)))) {
+        (deviceId && !/^[A-Za-z0-9_-]{1,64}$/.test(deviceId)) || (capturedAt && !validCaptureTimestamp(capturedAt))) {
 
       throw new ApiError(400, 'INVALID_METADATA', 'Image metadata is invalid or differs from examination.');
     }
@@ -205,6 +219,7 @@ export function createApp(config) {
   app.use((error, req, res, next) => {
     const tooLarge = error.code === 'LIMIT_FILE_SIZE';
     const status = tooLarge ? 413 : error instanceof multer.MulterError || error.type === 'entity.parse.failed' ? 400 : error.status || 500;
+    res.locals.errorCode = tooLarge ? 'UPLOAD_TOO_LARGE' : error instanceof ApiError ? error.code : status === 400 ? 'INVALID_REQUEST' : 'INTERNAL_ERROR';
     res.status(status).json({
       success: false, error: {
         code: tooLarge ? 'UPLOAD_TOO_LARGE' : error instanceof ApiError ? error.code : status === 400 ? 'INVALID_REQUEST' : 'INTERNAL_ERROR',

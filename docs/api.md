@@ -1,6 +1,8 @@
 # Kontrak API
 
-Planner final menjadi acuan jadwal; PRD menjadi acuan arsitektur. Endpoint lokal HTTP, loopback secara default. Autentikasi, HTTPS/LAN, quality gate klinis, Grad-CAM, dan dashboard ada di tahap berikutnya.
+Planner final menjadi acuan jadwal; PRD menjadi acuan arsitektur. Endpoint HTTP memakai loopback secara default. Mode penerima LAN tersedia melalui `npm run backend:lan`. Autentikasi, HTTPS, dan quality gate klinis belum diimplementasikan.
+
+`GET /api/device-contract`: kontrak mesin untuk integrasi perangkat, termasuk endpoint unggahan, nama field, batas ukuran aktual, timeout klien, dan kebijakan retry. Lihat [panduan perangkat](devices.md). Respons backend membawa header `X-Request-Id` untuk penelusuran.
 
 ## Backend
 
@@ -18,7 +20,7 @@ Frontend tersedia di `/dashboard`, `/patients`, `/patients/:patientId`, `/examin
 
 `POST /api/examinations`: JSON `{"patientId":"DEMO-001","eye":"RIGHT","captureType":"MACULA_CENTERED"}` → 201 examination. patientId adalah kode anonim 1–64 karakter alfanumerik/underscore/dash; Patient minimal otomatis dibuat jika belum ada. Eye LEFT/RIGHT, captureType MACULA_CENTERED/OPTIC_DISC_CENTERED.
 
-`POST /api/examinations/:id/images`: multipart `image` wajib PNG/JPEG, maksimal 10 MiB default; file benar-benar didecode, maksimal 40 juta piksel. Opsional `eye`, `capture_type` harus cocok dengan pemeriksaan; `device_id` kode 1–64 karakter; `capture_timestamp` timestamp yang dapat diparse. Backend menyimpan byte original tanpa perubahan lalu mengirim file multipart ke Python. Respons sinkron 200 examination lengkap setelah inference selesai.
+`POST /api/examinations/:id/images`: multipart `image` wajib PNG/JPEG, maksimal 10 MiB default; file benar-benar didecode, maksimal 40 juta piksel. Opsional `eye`, `capture_type` harus cocok dengan pemeriksaan; `device_id` kode 1–64 karakter; `capture_timestamp` ISO 8601 dengan zona waktu. Field tambahan, kosong, atau metadata berulang ditolak. Backend menyimpan byte original tanpa perubahan lalu mengirim file multipart ke Python. Respons sinkron 200 examination lengkap setelah inference selesai.
 
 `GET /api/examinations/:id`: 200 examination tersimpan, 404 jika tidak ada.
 

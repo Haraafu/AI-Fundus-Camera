@@ -2,7 +2,11 @@
 
 ## Cakupan
 
-Satu backbone EfficientNetB3 dengan satu keluaran softmax lima kelas DR. Urutan keluaran tetap `Mild,Moderate,No_DR,Proliferate_DR,Severe`, sama dengan kontrak aplikasi. Penambahan sumber dataset tidak otomatis membuat model mengenali penyakit lain.
+Eksperimen berikutnya memakai satu backbone EfficientNetB3 dengan keluaran softmax dua kelas, berurutan `No DR`, `DR`. Grade 0 (No DR) menjadi No DR, sedangkan grade 1 sampai 4 menjadi DR. No DR berarti tidak ada DR menurut label dataset, bukan jaminan tidak ada penyakit mata lain. Dataset penyakit selain DR tetap dikeluarkan.
+
+Manifest biner diturunkan dari audit lima kelas yang sudah ada. Identitas citra, pembagian subset, dan pengecualian konflik tetap dipertahankan. Grade awal disimpan dalam kolom `dr_grade`. Tidak ada data yang dipindahkan antar-subset atau citra konflik yang dimasukkan kembali.
+
+Checkpoint aplikasi saat ini masih lima kelas. Model biner yang dihasilkan memerlukan penyesuaian kontrak layanan AI, aturan risiko, dashboard, dan PDF sebelum integrasi. Persiapan ini tidak mengganti checkpoint aplikasi secara otomatis.
 
 ## Sumber Mendeley
 
@@ -35,16 +39,27 @@ Dari root proyek, memakai Python sistem yang memiliki dependensi AI, pandas, dan
 ```powershell
 python scripts/ml/download_mendeley.py
 python scripts/ml/prepare_combined_dr.py
-python scripts/ml/train_combined_dr.py
+python scripts/ml/prepare_binary_dr.py
+python scripts/ml/train_combined_binary.py
 ```
 
 Unduhan dan persiapan lokal memerlukan laptop tetap menyala. Training penuh sebaiknya dijalankan pada GPU, bukan TensorFlow CPU native Windows. Perintah training lokal di atas adalah entry point, bukan rekomendasi menjalankan fine tuning penuh pada CPU.
 
 Hasil persiapan berada di `data/combined-dr-v1/`: train.csv, validation.csv, test.csv, audit.json, conflicts.json, dan gambar hasil preprocessing. Gunakan direktori output baru saat mengulang persiapan agar audit tidak tertimpa.
 
-Hasil training berada di `models/combined_dr_b3_v1/`, termasuk best.keras, report.json, riwayat, prediksi per gambar, metrik keseluruhan, dan metrik per sumber. Metrik per sumber dapat memiliki anggota tumpang tindih ketika gambar memiliki lebih dari satu asal, sehingga bukan tiga evaluasi independen.
+Manifest biner berada di `data/combined-dr-binary-v1/` dan merujuk berkas citra yang sudah tersedia. Hasil training biner berada di `models/combined_dr_binary_b3_v1/`, termasuk best.keras, report.json, riwayat, prediksi per gambar, metrik keseluruhan, dan metrik per sumber. Skrip `train_combined_dr.py` tetap tersedia untuk eksperimen lama lima kelas, bukan entry point eksperimen biner.
+
+Kelas positif adalah DR dengan batas keputusan 0,5. Evaluasi mencakup akurasi, precision dan F1 kelas positif, sensitivitas, spesifisitas, macro F1, ROC-AUC, average precision, serta confusion matrix. Batas keputusan tidak ditentukan dari data test. Checkpoint dipilih berdasarkan macro F1 validasi. Target di atas 90% tidak dijamin oleh perubahan jumlah kelas.
+
+Metrik per sumber dapat memiliki anggota tumpang tindih ketika gambar memiliki lebih dari satu asal, sehingga bukan tiga evaluasi independen.
 
 Training menggunakan sampling kelas campuran serta checkpoint berdasarkan validation macro F1 dari pipeline V2. Belum ada penyeimbangan berdasarkan sumber. Distribusi sumber dan performa per sumber harus ditinjau untuk memastikan EyePACS tidak mendominasi semua kesimpulan.
+
+## Job GPU Kaggle privat
+
+`python scripts/ml/package_binary_kaggle.py` menyiapkan arsip citra dan manifest dengan path relatif di `data/kaggle-combined-binary-dataset/`, serta kode mandiri dan metadata kernel di `data/kaggle-combined-binary-training/`. Tidak ada kredensial aplikasi yang dikemas.
+
+Dataset Kaggle privat: `falahandhesryo/combined-dr-binary-audited-v1`. Kernel privat: `falahandhesryo/combined-dr-efficientnetb3-binary-v1`. Dataset harus selesai diproses sebelum kernel dijalankan. Job menolak berjalan tanpa GPU dan mempertahankan kelas keluaran `No DR`, `DR`. Maksimum pelatihan adalah 8 epoch head dan 20 epoch fine tuning, dengan early stopping berdasarkan macro F1 validasi. Hasil tersimpan di output kernel pada direktori `combined_dr_binary_b3_v1/`.
 
 ## Batas evaluasi
 

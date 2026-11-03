@@ -20,7 +20,7 @@ The repository provides the following working components:
 - A smoke-test script for exercising the local backend with a dataset image.
 - A frontend MVP with dashboard, patient history, examination upload, original/processed images, and model results.
 - Class-specific Grad-CAM overlays and activation maps from the actual integrated checkpoint, with explicit unavailable status when an explanation cannot be generated.
-- An HTTP camera contract, a device-status page, and a simulated camera client. See [device interface](docs/devices.md) and [demo guide](docs/demo.md).
+- An HTTP camera contract, status telemetry, and a simulated camera client. See [device interface](docs/devices.md) and [demo guide](docs/demo.md).
 
 ## System Flow
 
@@ -45,11 +45,18 @@ The backend listens on `http://127.0.0.1:3001` by default.
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
 | `GET` | `/health` | Check backend availability |
+| `GET` | `/api/device-contract` | Read camera upload fields, limits, and retry policy |
 | `POST` | `/api/examinations` | Create an examination |
 | `POST` | `/api/examinations/:id/images` | Upload and analyse one fundus image |
 | `GET` | `/api/examinations/:id` | Retrieve examination, image, and result data |
 
 Creating an examination requires a patient identifier, eye selection (`LEFT` or `RIGHT`), and capture type (`MACULA_CENTERED` or `OPTIC_DISC_CENTERED`). Uploaded files must be PNG or JPEG images. The default maximum upload size is 10 MiB and the default maximum image size is 40 megapixels.
+
+### Receiving camera images over local Wi-Fi
+
+Start the AI service first, then run `npm run backend:lan` instead of the normal backend command. This binds the backend to local network interfaces and prints candidate IPv4 URLs without editing `.env` or switching database mode. The camera sends HTTP multipart requests to the laptop's Wi-Fi IPv4 address on port 3001, not to localhost. Only the backend needs to be reachable from the device.
+
+Use `/health`, `/api/system`, and `/api/device-contract` to check connectivity, AI readiness, and upload requirements. The [hardware integration guide](docs/devices.md) contains PowerShell/curl examples, error responses, timeout handling, and the shared acceptance checklist. MQTT is not required by this HTTP receiver and has not been implemented. Cross-device Wi-Fi and physical-camera tests remain a joint hardware/software step.
 
 ### Python AI service
 
@@ -111,6 +118,16 @@ SQLite is created automatically at `data/fundus.sqlite`. The store contains:
 The service stores extensible JSON documents for examination, image, and AI-result records. Uploaded files are stored under `data/uploads/` while the database keeps their metadata and references.
 
 To use MongoDB, configure `DATABASE_URL` and optionally `DATABASE_NAME` in the ignored local `.env` file. The backend selects MongoDB when the URL is non-empty and otherwise retains SQLite. MongoDB writes the four entities to separate collections and uses a transaction for each examination update.
+
+### MongoDB Atlas Startup Failures
+
+If MongoDB cannot connect, the backend exits without switching to SQLite. The Node SQLite experimental warning is unrelated to MongoDB connectivity.
+
+- `queryTxt ETIMEOUT` or `querySrv ETIMEOUT`: your DNS resolver could not resolve the Atlas connection records. Check TXT records for your cluster hostname and SRV records for `_mongodb._tcp.<cluster-hostname>`. Try an approved alternative DNS resolver or network if these lookups time out.
+- TLS alerts or server-selection timeouts: in Atlas **Network Access**, allow your current public IP (VPN or network changes can change it). Confirm the cluster is running and your firewall/VPN permits outbound TCP 27017 to its nodes. These errors occur before authentication and do not by themselves prove the password is wrong.
+- Check the connection string and database user credentials after connectivity is working. URL-encode special characters in credentials. Never disable TLS certificate validation to work around this failure.
+
+For intentional offline/local development, set `DATABASE_URL=` in your local `.env` file and remove any non-empty `DATABASE_URL` override in the launching shell, then rerun `npm run backend`. This selects a separate local SQLite database; it does not copy or expose records already stored in Atlas.
 
 ## Machine-Learning Pipeline
 
