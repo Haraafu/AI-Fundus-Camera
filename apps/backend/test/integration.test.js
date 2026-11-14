@@ -332,3 +332,62 @@ test('PDF export uses current result and real generator; incomplete and Python f
   assert.equal(error.status, 500); assert.equal(error.body.error.code, 'REPORT_FAILED');
   assert.equal((await broken.request(`/api/examinations/${pending.examinationId}`)).body.status, 'COMPLETED');
 });
+
+
+test('patients can be edited, renamed and deleted; examinations can be deleted with their files', async t => {
+  const f = await fixture(t);
+  const send = (method, path, body) => f.request(path, body === undefined ? { method } : { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  assert.equal((await send('POST', '/api/patients', { patientId: 'TEST-001', notes: 'kontrol' })).body.notes, 'kontrol');
+  const exam = await f.create();
+  const uploaded = await f.upload(exam.examinationId);
+  const original = join(f.config.uploadDir, uploaded.body.image.originalPath);
+  const saved = await f.store.get(exam.examinationId);
+  saved.image.gradcamPath = 'patient-gradcam.png';
+  saved.image.heatmapPath = 'patient-heatmap.png';
+  writeFileSync(join(f.config.uploadDir, saved.image.gradcamPath), png);
+  writeFileSync(join(f.config.uploadDir, saved.image.heatmapPath), png);
+  await f.store.save(saved);
+  const imageFiles = ['originalPath', 'processedPath', 'gradcamPath', 'heatmapPath']
+    .map(field => join(f.config.uploadDir, saved.image[field]));
+
+  assert.equal((await send('PATCH', '/api/patients/TEST-001', { notes: 'x'.repeat(501) })).status, 400);
+  assert.equal((await send('PATCH', '/api/patients/TEST-001', { patientId: 'bad id' })).status, 400);
+  assert.equal((await send('POST', '/api/patients', { patientId: 'TEST-002' })).status, 201);
+  assert.equal((await send('PATCH', '/api/patients/TEST-001', { patientId: 'TEST-002' })).status, 409);
+  const renamed = await send('PATCH', '/api/patients/TEST-001', { patientId: 'TEST-003', notes: 'baru' });
+  assert.equal(renamed.status, 200);
+  assert.deepEqual([renamed.body.patientId, renamed.body.notes], ['TEST-003', 'baru']);
+  assert.equal((await f.request('/api/patients/TEST-001')).status, 404);
+  assert.equal((await f.request(`/api/examinations/${exam.examinationId}`)).body.patientId, 'TEST-003');
+  assert.equal((await f.request('/api/examinations?patientId=TEST-003')).body.length, 1);
+
+  const second = (await send('POST', '/api/examinations', { patientId: 'TEST-003', eye: 'LEFT', captureType: 'MACULA_CENTERED' })).body;
+  assert.equal((await send('DELETE', `/api/examinations/${second.examinationId}`)).status, 200);
+  assert.equal((await f.request(`/api/examinations/${second.examinationId}`)).status, 404);
+
+  const deleted = await send('DELETE', '/api/patients/TEST-003');
+  assert.equal(deleted.status, 200);
+  assert.equal(deleted.body.deletedExaminations, 1);
+  assert.equal(deleted.body.filesRemoved, true);
+  assert.ok(imageFiles.every(file => !existsSync(file)));
+  assert.equal((await f.request(`/api/examinations/${exam.examinationId}`)).status, 404);
+  assert.deepEqual((await f.request('/api/patients')).body.map(p => p.patientId), ['TEST-002']);
+  await delay(50);
+  assert.throws(() => readFileSync(original));
+  assert.equal((await send('DELETE', '/api/patients/TEST-003')).status, 404);
+});
+
+test('patient edit and deletion refuse in-progress examinations and preserve their files', async t => {
+  const f = await fixture(t), exam = await f.create();
+  const completed = (await f.upload(exam.examinationId)).body;
+  completed.status = 'PROCESSING';
+  await f.store.save(completed);
+  for (const method of ['PATCH', 'DELETE']) {
+    const options = { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ patientId: 'RENAMED' }) };
+    const response = await f.request('/api/patients/TEST-001', options);
+    assert.equal(response.status, 409);
+    assert.equal(response.body.error.code, 'PATIENT_BUSY');
+  }
+  assert.equal((await f.store.get(exam.examinationId)).patientId, 'TEST-001');
+  assert.ok(existsSync(join(f.config.uploadDir, completed.image.originalPath)));
+});

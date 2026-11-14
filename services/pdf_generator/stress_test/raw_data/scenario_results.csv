@@ -1,0 +1,15 @@
+scenario_id,category,description,wall_ms,cpu_ms,peak_mem_kb,file_size_kb,page_count,is_valid_pdf,has_standard_fonts,status
+N0_SQLite_DB_Actual,Normal,Data pemeriksaan aktual dari database data/fundus.sqlite (ID: 5460fa35... / DEMO-001),225.44,203.12,4135.28,538.17,1,True,True,PASS
+N1_Normal_No_DR,Normal,Skrining Normal (No DR - Risiko LOW) dengan citra CLAHE & Grad-CAM retina,275.02,250.0,4127.75,538.15,1,True,True,PASS
+N2_Normal_Mild,Normal,Skrining Mild NPDR (Risiko LOW) dengan citra CLAHE & Grad-CAM retina,228.3,234.38,4126.61,538.16,1,True,True,PASS
+N3_Normal_Moderate,Normal,Skrining Moderate NPDR (Risiko MEDIUM) sesuai payload standar,235.48,234.38,4128.24,538.17,1,True,True,PASS
+N4_Normal_Severe,Normal,Skrining Severe NPDR (Risiko HIGH) dengan citra CLAHE & Grad-CAM retina,236.21,234.38,4125.99,538.2,1,True,True,PASS
+N5_Normal_Proliferative,Normal,Skrining Proliferative DR (Risiko HIGH) prioritas rujukan tinggi,226.39,218.75,4125.52,538.17,1,True,True,PASS
+B1_Boundary_1080p_16x9,Boundary,"Citra fundus pada kanvas Full-HD (1920x1080, rasio 16:9) menguji penskalaan proporsional",1373.8,1328.12,38664.44,3143.15,1,True,True,PASS
+B2_Boundary_MinRes_64x64,Boundary,Citra fundus resolusi minimum (64x64 px) menguji ketahanan upscaling kotak 215x170 pt,33.73,31.25,398.57,17.12,1,True,True,PASS
+B3_Boundary_MaxStringLength,Boundary,String metadata ID pasien & ID pemeriksaan ekstra panjang menguji wrapping 1 halaman A4,221.84,218.75,4127.01,538.22,1,True,True,PASS
+F1_Fault_GradcamNull_BackendMode,Gangguan (Fault),Path Grad-CAM bernilai null (simulasi output aktual endpoint backend P0/P1),130.2,140.62,3264.33,279.73,1,True,True,PASS
+F2_Fault_BothImagesMissing,Gangguan (Fault),Kedua path citra hilang/tidak ditemukan di disk -> menguji fallback placeholder ganda,16.75,15.62,374.74,4.21,1,True,True,PASS
+F3_Fault_CorruptedImageStream,Gangguan (Fault),Berkas citra rusak (corrupt binary bytes) -> menguji tangkapan eksepsi ImageReader,162.85,140.62,374.25,4.17,1,True,True,PASS
+F4_Fault_MissingJSONFields,Gangguan (Fault),Payload JSON minim/kosong (tanpa atribut primary_screening & probabilities) -> fallback N/A,17.56,15.62,367.23,3.6,1,True,True,PASS
+F5_Fault_MalformedJSON_CLI,Gangguan (Fault),Input JSON rusak/malformed pada CLI -> menolak render dengan exit code 1 terkendali,582.41,0.0,0.0,0.0,0,False,False,PASS

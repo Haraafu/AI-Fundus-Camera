@@ -65,7 +65,49 @@ export function createApp(config) {
     if (typeof patientId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(patientId)) {
       throw new ApiError(400, 'INVALID_METADATA', 'Provide an anonymous patient code (1–64 characters).');
     }
-    res.status(201).json(await store.savePatient({ patientId, createdAt: new Date().toISOString() }));
+    res.status(201).json(await store.savePatient({ patientId, createdAt: new Date().toISOString(), notes: validNotes(req.body?.notes) ?? '' }));
+  });
+  const validPatientId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value);
+  function validNotes(notes) {
+    if (notes === undefined || notes === null) return undefined;
+    if (typeof notes !== 'string' || notes.length > 500) throw new ApiError(400, 'INVALID_METADATA', 'Notes must be text up to 500 characters.');
+    return notes.trim();
+  }
+  const isBusy = exam => busy.has(exam.examinationId) || ['IMAGE_RECEIVED', 'PROCESSING'].includes(exam.status);
+  const removeFiles = async exam => {
+    const fields = ['originalPath', 'processedPath', 'gradcamPath', 'heatmapPath'];
+    const filenames = [...new Set(fields.map(field => exam.image?.[field]).filter(name =>
+      typeof name === 'string' && name.length > 0 && name === basename(name)))];
+    const cleanup = await Promise.allSettled(filenames.map(name => unlink(resolve(config.uploadDir, name))));
+    for (const device of devices.values()) if (device.examinationId === exam.examinationId) device.examinationId = null;
+    return cleanup.every(item => item.status === 'fulfilled' || item.reason?.code === 'ENOENT');
+  };
+  async function findPatient(req, res, next) {
+    if (!validPatientId(req.params.patientId)) throw new ApiError(400, 'INVALID_METADATA', 'Invalid patient code.');
+    req.patient = await store.getPatient(req.params.patientId);
+    if (!req.patient) throw new ApiError(404, 'PATIENT_NOT_FOUND', 'Patient not found.');
+    req.patientExams = await store.listExaminations(req.params.patientId);
+    if (req.method !== 'GET' && req.patientExams.some(isBusy)) {
+      throw new ApiError(409, 'PATIENT_BUSY', 'An examination for this patient is still processing.');
+    }
+    next();
+  }
+  app.get('/api/patients/:patientId', findPatient, (req, res) => res.json(req.patient));
+  app.patch('/api/patients/:patientId', findPatient, async (req, res) => {
+    const { patientId } = req.body ?? {}, notes = validNotes(req.body?.notes);
+    if (patientId !== undefined && !validPatientId(patientId)) {
+      throw new ApiError(400, 'INVALID_METADATA', 'Provide an anonymous patient code (1–64 characters).');
+    }
+    if (patientId && patientId !== req.patient.patientId && await store.getPatient(patientId)) {
+      throw new ApiError(409, 'PATIENT_EXISTS', 'Another patient already uses this code.');
+    }
+    res.json(await store.updatePatient(req.patient.patientId, { patientId, notes }));
+  });
+  app.delete('/api/patients/:patientId', findPatient, async (req, res) => {
+    const deleted = await store.deletePatient(req.patient.patientId) ?? [];
+    const cleanup = await Promise.all(deleted.map(removeFiles));
+    res.json({ success: true, patientId: req.patient.patientId, deletedExaminations: deleted.length,
+      filesRemoved: cleanup.every(Boolean) });
   });
   app.get('/api/examinations', async (req, res) => {
     if (Object.keys(req.query).some(key => key !== 'patientId')) throw new ApiError(400, 'INVALID_METADATA', 'Unknown query parameter.');
@@ -102,14 +144,10 @@ export function createApp(config) {
     }
     busy.add(id);
     try {
-      if (!await store.deleteExamination(id)) throw new ApiError(404, 'EXAMINATION_NOT_FOUND', 'Examination not found.');
-      const fields = ['originalPath', 'processedPath', 'gradcamPath', 'heatmapPath'];
-      const filenames = [...new Set(fields.map(field => req.exam.image?.[field]).filter(name =>
-        typeof name === 'string' && name.length > 0 && name === basename(name)))];
-      const cleanup = await Promise.allSettled(filenames.map(name => unlink(resolve(config.uploadDir, name))));
-      const filesRemoved = cleanup.every(item => item.status === 'fulfilled' || item.reason?.code === 'ENOENT');
-      for (const device of devices.values()) if (device.examinationId === id) device.examinationId = null;
-      res.json({ deleted: true, examinationId: id, filesRemoved });
+      const deleted = await store.deleteExamination(id);
+      if (!deleted) throw new ApiError(404, 'EXAMINATION_NOT_FOUND', 'Examination not found.');
+      const filesRemoved = await removeFiles(deleted);
+      res.json({ deleted: true, success: true, examinationId: id, filesRemoved });
     } finally { busy.delete(id); }
   });
   app.get('/api/examinations/:id/images/:variant', find, (req, res, next) => {
