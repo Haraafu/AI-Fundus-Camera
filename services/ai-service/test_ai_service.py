@@ -57,6 +57,13 @@ class AiServiceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             map_probabilities([.2] * 5, ['Mild'] * 5)
 
+    def test_binary_checkpoint_labels_follow_training_order(self):
+        prediction, probabilities = map_probabilities([.23, .77], ['No DR', 'DR'])
+        self.assertEqual(prediction, {'class': 'DR', 'confidence': .77})
+        self.assertEqual(probabilities, {'No_DR': .23, 'DR': .77})
+        with self.assertRaises(ValueError):
+            map_probabilities([.23, .77], ['No DR', 'Mild'])
+
     def test_mock_preprocesses_but_still_marks_prediction_as_mock(self):
         with TestClient(ai_app.create_app('mock')) as client:
             health = client.get('/ready')
@@ -110,17 +117,18 @@ class AiServiceTests(unittest.TestCase):
     def test_invalid_model_output_returns_structured_inference_error(self):
         class InvalidOutputModel:
             input_shape = (None, 300, 300, 3)
-            output_shape = (None, 5)
+            output_shape = (None, 2)
 
             def __call__(self, batch, training=False):
-                return np.zeros((1, 5), dtype=np.float32)
+                return np.zeros((1, 2), dtype=np.float32)
 
         with tempfile.TemporaryDirectory() as directory:
             model_path = Path(directory) / 'invalid-output.keras'
             model_path.write_bytes(b'test fixture')
             with patch.object(adapters, '_load_model', return_value=InvalidOutputModel()):
                 with TestClient(ai_app.create_app('model', model_path=model_path,
-                                                   model_version='invalid-output-test')) as client:
+                                                   model_version='invalid-output-test',
+                                                   model_class_names=adapters.DEFAULT_MODEL_CLASSES)) as client:
                     self.assertEqual(client.get('/ready').status_code, 200)
                     response = client.post('/predict', files={'image': ('fundus.png', self.png, 'image/png')})
                     self.assertEqual(response.status_code, 500)

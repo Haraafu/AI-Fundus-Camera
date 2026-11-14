@@ -64,3 +64,26 @@ Dataset Kaggle privat: `falahandhesryo/combined-dr-binary-audited-v1`. Kernel pr
 ## Batas evaluasi
 
 Test historis sudah pernah diperiksa dan tidak merupakan test eksternal yang baru. Audit duplikat atau konflik dapat mengubah anggota holdout gabungan, sehingga skor gabungan tidak boleh langsung dibandingkan dengan skor lama tanpa menyamakan daftar gambar evaluasi. Target di atas 90% masih target penelitian, bukan hasil. Model aplikasi tidak diganti otomatis oleh script training.
+
+## Hasil evaluasi model biner
+
+Job Kaggle versi 3 selesai. Pada 5.553 citra uji gabungan dengan ambang 0,5, hasilnya sebagai berikut.
+
+| Metrik | Nilai |
+| --- | ---: |
+| Akurasi | 83,94% |
+| Precision kelas DR | 73,56% |
+| Sensitivitas DR | 60,54% |
+| Spesifisitas | 92,26% |
+| F1 kelas DR | 66,42% |
+| Macro F1 | 77,93% |
+| ROC-AUC | 0,853 |
+
+| Label acuan | Prediksi No DR | Prediksi DR |
+| --- | ---: | ---: |
+| No DR | 3.779 | 317 |
+| DR | 575 | 882 |
+
+Sensitivitas bervariasi menurut asal citra: EyePACS 52,14%, APTOS 95,97%, dan Mendeley 53,20%. Kelompok asal dapat tumpang tindih, sehingga angka tersebut tidak mewakili tiga set uji independen. Akurasi latih 87,72% dan validasi 83,86%, tetapi selisih itu saja tidak cukup untuk menilai generalisasi pada citra kamera prototipe.
+
+Checkpoint biner dipasang pada aplikasi lokal untuk pengujian prototipe. Pada ambang saat ini, 575 dari 1.457 citra DR terlewat dan hasil belum memenuhi target penelitian. Langkah berikutnya adalah menilai pertukaran sensitivitas dan spesifisitas pada data validasi sebelum menguji ambang yang dikunci pada data evaluasi terpisah. Hasil sumber berasal dari `data/kaggle-results/combined-binary-v1/completed/combined_dr_binary_b3_v1/report.json`.

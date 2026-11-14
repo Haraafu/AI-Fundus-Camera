@@ -14,7 +14,12 @@ __pycache__/
 # Generated datasets, downloads, models, and runtime state
 colored_images/
 preprocessed_images/
-models/
+models/*
+!models/kaggle-binary/
+models/kaggle-binary/*
+!models/kaggle-binary/combined_dr_binary_b3_v1/
+models/kaggle-binary/combined_dr_binary_b3_v1/*
+!models/kaggle-binary/combined_dr_binary_b3_v1/best.keras
 models.zip
 data/
 *.sqlite*
@@ -22,6 +27,10 @@ data/
 
 # Internal handover notes and machine-specific validation metadata
 docs/internal/
+
+# Personal weekly reports
+LAPORAN PEKAN*.docx
+~$*.docx
 
 # Temporary editor and operating-system files
 *.tmp

@@ -3,7 +3,7 @@ import sys
 import argparse
 from config import create_document_canvas
 from components import get_header_and_disclaimer, get_metadata_table, get_image_table
-from dynamic_components import get_primary_screening_table, get_9_risk_categories_table, get_5_class_probabilities_table
+from dynamic_components import get_primary_screening_table, get_9_risk_categories_table, get_class_probabilities_table
 from adapter import load_data, get_safe_value
 from reportlab.platypus import Spacer, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet
@@ -52,10 +52,10 @@ def main():
     story.append(get_image_table(img_clahe, img_gradcam))
     story.append(Spacer(1, 10))
 
-    # the 5 Class DR Probabilities Table
+    # Show the classes reported by the active checkpoint.
     probabilities = data.get("probabilities", {})
     predicted_class = screening_data.get("severity_stage", "")
-    story.append(get_5_class_probabilities_table(probabilities, predicted_class))
+    story.append(get_class_probabilities_table(probabilities, predicted_class))
     story.append(Spacer(1, 10))
 
     info = "Model: {}<br/>Preprocessing: {}<br/>Aturan risiko: {}".format(*[
@@ -63,7 +63,9 @@ def main():
         for key in ["model_version", "preprocessing_version", "risk_rule_version"]])
     story.append(Paragraph(info, getSampleStyleSheet()["Normal"]))
     story.append(Spacer(1, 10))
-    story.append(Paragraph("Grad-CAM menunjukkan kontribusi relatif area citra, bukan segmentasi lesi. Kategori risiko mengikuti kelas DR. Hasil skrining perlu ditinjau tenaga medis dan tidak merupakan diagnosis.", getSampleStyleSheet()["Normal"]))
+    risk_note = ("Model biner tidak menentukan tingkat keparahan. No DR tidak menyingkirkan kemungkinan DR."
+                 if screening_data.get("risk_level") == "NOT_ASSESSED" else "Kategori risiko mengikuti kelas DR.")
+    story.append(Paragraph(f"Grad-CAM menunjukkan kontribusi relatif area citra, bukan segmentasi lesi. {risk_note} Hasil skrining perlu ditinjau tenaga medis dan tidak merupakan diagnosis.", getSampleStyleSheet()["Normal"]))
     story.append(Spacer(1, 10))
 
     # Only show additional measurements when the payload actually supplies them.

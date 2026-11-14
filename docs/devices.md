@@ -98,6 +98,8 @@ npm run device:mock -- 'C:\captures\fundus.jpg' HW-DEMO-001 CAMERA-01 --eye=LEFT
 
 Klien memeriksa kesiapan AI dan batas ukuran sebelum membuat pemeriksaan. Selama upload, heartbeat dikirim setiap 15 detik. Jika respons gagal, klien membaca pemeriksaan untuk mengetahui apakah hasil sudah tersimpan, tanpa mengulangi upload otomatis.
 
+Untuk uji bersama, jalankan klien dari laptop kedua pada jaringan Wi-Fi perangkat. Hasil `receiptVerified: true` berarti pemeriksaan berstatus `COMPLETED`, metadata sesuai, dan citra asli yang diunduh kembali memiliki SHA-256 yang sama dengan berkas pengirim. Simpan keluaran terminal untuk mencatat `requestId`, `examinationId`, ukuran berkas, waktu inferensi, dan mode AI. `elapsedMs` mencakup unggahan, pemrosesan, dan verifikasi hasil. Setelah tes laptop kedua berhasil, ulangi uji dengan pengiriman dari perangkat kamera dan periksa hasil pada dashboard.
+
 ## Kriteria uji bersama
 
 - Perangkat pengirim dapat menjangkau `/health` dan memperoleh kontrak API dari alamat IPv4 penerima.

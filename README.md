@@ -93,7 +93,7 @@ The default service uses `AI_MODE=mock`: preprocessing is real and predictions a
 
 The full response additionally carries `preprocessing` with a processed PNG encoded as base64 and its parameters; see [API contract](docs/api.md). The backend validates and stores that PNG without retaining base64 in the database.
 
-`AI_MODE=model` loads the Keras checkpoint configured by `MODEL_PATH`. `MODEL_CLASS_NAMES` must list the five model outputs in their training order; the adapter maps them to the canonical API labels. A missing checkpoint returns `MODEL_NOT_READY`, and a load failure returns `MODEL_LOAD_FAILED`; model mode never falls back to mock. Configure the same mode on both services. See [model contract](docs/model-contract.md).
+`AI_MODE=model` loads the Keras checkpoint configured by `MODEL_PATH`. `MODEL_CLASS_NAMES` must list the two binary or five severity outputs in their training order; the adapter maps them to the canonical API labels. A missing checkpoint returns `MODEL_NOT_READY`, and a load failure returns `MODEL_LOAD_FAILED`; model mode never falls back to mock. Configure the same mode on both services. See [model contract](docs/model-contract.md).
 
 ## Examination Lifecycle
 
@@ -176,7 +176,7 @@ python scripts/ml/train_fundus_ordinal.py
 
 The earlier fine-tuning workflow remains available as `scripts/ml/train_efficientnetb3_legacy.py` for comparison.
 
-The currently integrated research checkpoint is `models/fundus_b3_ordinal.keras`. It can be replaced after later training by changing `MODEL_PATH`, `MODEL_VERSION`, and `MODEL_CLASS_NAMES`, provided the replacement follows the documented input and output contract. See [training results](docs/training.md) and [integration validation](docs/integration.md).
+The active checkpoint is the binary EfficientNetB3 at `models/kaggle-binary/combined_dr_binary_b3_v1/best.keras`. Its inference export is included in Git (44.5 MB), so cloning or pulling this repository also downloads the model; Git LFS and access to the private Kaggle job are not required. Optimizer state was removed, with all 499 weights and predictions on three local images verified identical to the original training checkpoint. Older checkpoints have been removed locally; their training scripts remain available as historical experiments. See [binary evaluation](docs/combined-training.md#hasil-evaluasi-model-biner) and [integration validation](docs/integration.md).
 
 ## Project Structure
 
@@ -203,7 +203,7 @@ The currently integrated research checkpoint is `models/fundus_b3_ordinal.keras`
 |   `-- uploads/                # Uploaded originals
 |-- colored_images/             # Source dataset, ignored by Git
 |-- preprocessed_images/        # Generated dataset, ignored by Git
-|-- models/                     # Generated model files, ignored by Git
+|-- models/                     # Active binary inference model tracked; other outputs ignored
 |-- preprocess.py
 |-- train.csv
 |-- package.json
@@ -233,12 +233,14 @@ For real inference, set these values in `.env`:
 
 ```dotenv
 AI_MODE=model
-MODEL_PATH=./models/fundus_b3_ordinal.keras
-MODEL_VERSION=fundus-b3-ordinal-aptos-v1
-MODEL_CLASS_NAMES=Mild,Moderate,No_DR,Proliferate_DR,Severe
+MODEL_PATH=./models/kaggle-binary/combined_dr_binary_b3_v1/best.keras
+MODEL_VERSION=combined-dr-binary-b3-v1-kaggle-v3
+MODEL_CLASS_NAMES=No DR,DR
 ```
 
 Keep `AI_MODE=mock` for deterministic integration tests. The checked-in `.env.example` defaults to mock mode, while this workspace's local `.env` is configured for the integrated model.
+
+Each teammate uses their own `.env`. Leave `DATABASE_URL` empty for a local SQLite database, or configure an authorized MongoDB connection separately. Reports, uploaded images, datasets, and local credentials are excluded from Git. After pulling an existing checkout, update the model settings above and restart both services.
 
 Start the AI service in one terminal:
 

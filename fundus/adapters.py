@@ -6,11 +6,11 @@ from threading import Lock
 
 import numpy as np
 
-from .contract import CLASSES, canonical_label, map_probabilities
+from .contract import BINARY_CLASSES, CLASSES, canonical_label, class_schema, map_probabilities
 from .preprocessing import model_input
 
 
-DEFAULT_MODEL_CLASSES = ("Mild", "Moderate", "No_DR", "Proliferate_DR", "Severe")
+DEFAULT_MODEL_CLASSES = ("No DR", "DR")
 
 
 class ModelNotReadyError(RuntimeError):
@@ -59,16 +59,14 @@ class TensorFlowModelAdapter:
         self.lock = Lock()
         self.model_path = Path(model_path).expanduser().resolve()
         self.model_class_names = tuple(model_class_names or DEFAULT_MODEL_CLASSES)
-        canonical = [canonical_label(name) for name in self.model_class_names]
-        if len(canonical) != 5 or set(canonical) != set(CLASSES):
-            raise ValueError("MODEL_CLASS_NAMES must contain each API class exactly once")
+        self.class_schema = class_schema(self.model_class_names)
         if not self.model_path.is_file():
             return
         try:
             self.model = _load_model(str(self.model_path))
             if tuple(self.model.input_shape) != (None, 300, 300, 3):
                 raise ValueError(f"Unexpected model input shape: {self.model.input_shape}")
-            if tuple(self.model.output_shape) != (None, 5):
+            if tuple(self.model.output_shape) != (None, len(self.class_schema)):
                 raise ValueError(f"Unexpected model output shape: {self.model.output_shape}")
             self.model_version = model_version or self.model_path.stem
             self.ready = True
@@ -87,7 +85,7 @@ class TensorFlowModelAdapter:
         values = np.asarray(output, dtype=np.float64).reshape(-1).tolist()
         prediction, probabilities = map_probabilities(values, self.model_class_names)
         result = {"success": True, "isMock": False, "prediction": prediction,
-                "probabilities": probabilities, "riskLevel": _risk_level(prediction["class"]),
+                "probabilities": probabilities, "riskLevel": "NOT_ASSESSED" if self.class_schema == BINARY_CLASSES else _risk_level(prediction["class"]),
                 "modelVersion": self.model_version}
         try:
             from .gradcam import GradCAM
@@ -108,7 +106,7 @@ def create_adapter(mode, model_path=None, model_version=None, model_class_names=
     if mode == "mock":
         return MockAdapter()
     if mode == "model":
-        path = model_path or os.getenv("MODEL_PATH", "models/fundus_b3_ordinal.keras")
+        path = model_path or os.getenv("MODEL_PATH", "models/kaggle-binary/combined_dr_binary_b3_v1/best.keras")
         version = model_version or os.getenv("MODEL_VERSION")
         names = model_class_names
         if names is None:

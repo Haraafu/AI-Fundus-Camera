@@ -1,5 +1,7 @@
 # Fundus model training run (2026-09-26)
 
+Historical five-class experiment. Its checkpoints have been removed locally; the application now uses the [binary EfficientNetB3 model](combined-training.md#hasil-evaluasi-model-biner).
+
 ## Data and split
 
 The source contains 3,662 preprocessed images. Exact SHA-256 checks found 123 duplicate-image groups (251 files). Thirty groups (62 files) have conflicting diagnosis labels. Training excludes those ambiguous groups and uses one representative per remaining hash, leaving 3,504 unique consistently labelled images.

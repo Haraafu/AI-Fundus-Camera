@@ -1,6 +1,10 @@
 # Kontrak integrasi model
 
-Status saat ini: checkpoint riset `models/fundus_b3_ordinal.keras` sudah terintegrasi untuk inference lokal. Checkpoint pengganti hasil training berikutnya dapat dipasang melalui konfigurasi tanpa mengubah kontrak API.
+Model aktif lokal adalah EfficientNetB3 biner dari Kaggle versi 3. Konfigurasi: `MODEL_PATH=./models/kaggle-binary/combined_dr_binary_b3_v1/best.keras`, `MODEL_VERSION=combined-dr-binary-b3-v1-kaggle-v3`, dan `MODEL_CLASS_NAMES=No DR,DR`. API mengembalikan `No_DR` dan `DR`. Model memakai argmax pada dua probabilitas dan tidak menilai tingkat keparahan atau risiko klinis. Hasil biner menyimpan `riskLevel=NOT_ASSESSED`.
+
+Checkpoint berasal dari output `combined_dr_binary_b3_v1/best.keras` pada kernel privat `falahandhesryo/combined-dr-efficientnetb3-binary-v1` versi 3. Versi inferensi berukuran 44.497.131 byte disertakan dalam Git; state optimizer training dikeluarkan tanpa mengubah bobot. Seluruh 499 bobot dan prediksi tiga citra lokal diverifikasi identik dengan checkpoint training. Lihat [evaluasi model biner](combined-training.md#hasil-evaluasi-model-biner) untuk batas kinerjanya. Grad-CAM dapat berstatus `UNAVAILABLE` jika tidak ada aktivasi positif pada citra yang diprediksi.
+
+Checkpoint model lama sudah dihapus dari folder `models/`. Pembacaan riwayat hasil lima kelas tetap didukung. Checkpoint training biner lengkap hanya diarsipkan lokal pada `data/model-archives/` yang di-ignore.
 
 ## Input dan preprocessing
 
@@ -29,9 +33,9 @@ Perintah membuat PNG terpisah dan JSON metadata/checksum. Exit code 1 berarti pi
 
 ## Urutan kelas
 
-Urutan kanonis API adalah `No_DR`, `Mild`, `Moderate`, `Severe`, `Proliferative_DR`. **Urutan ini bukan asumsi urutan neuron output model.** Urutan neuron checkpoint aktif dikonfigurasi melalui `MODEL_CLASS_NAMES`; nilainya saat ini `Mild,Moderate,No_DR,Proliferate_DR,Severe`.
+Urutan kanonis API untuk model aktif adalah `No_DR`, `DR`. Urutan neuron checkpoint aktif dikonfigurasi melalui `MODEL_CLASS_NAMES=No DR,DR`. Riwayat model lama menggunakan `No_DR`, `Mild`, `Moderate`, `Severe`, `Proliferative_DR`.
 
-`fundus/contract.py::map_probabilities` menerima probabilitas beserta daftar kelas model dan memetakan berdasarkan nama. Alias yang didukung adalah `Proliferate_DR` → `Proliferative_DR`. Lima kelas harus muncul tepat sekali, probabilitas finite dalam [0,1], dan jumlahnya 1 dengan toleransi 0.0001. Predicted class adalah argmax dan confidence adalah probabilitas kelas tersebut. Tidak ada softmax kedua atau pengubahan urutan berdasarkan tebakan.
+`fundus/contract.py::map_probabilities` menerima probabilitas beserta daftar kelas model dan memetakan berdasarkan nama. Alias yang didukung adalah `No DR` → `No_DR` dan `Proliferate_DR` → `Proliferative_DR`. Setiap kelas dalam skema biner atau lima kelas harus muncul tepat sekali, probabilitas finite dalam [0,1], dan jumlahnya 1 dengan toleransi 0.0001. Predicted class adalah argmax dan confidence adalah probabilitas kelas tersebut. Tidak ada softmax kedua atau pengubahan urutan berdasarkan tebakan.
 
 ## Mode dan kesiapan
 

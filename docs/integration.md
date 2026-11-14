@@ -1,22 +1,25 @@
 # Integrasi dan Validasi Model
 
-Dokumen ini menjelaskan checkpoint yang sedang dipakai aplikasi, alur inference, bukti pengujian, dan cara menggantinya. Status teknis saat ini adalah **lulus untuk prototipe riset**. Persetujuan formal model klinis belum tersedia.
+Dokumen ini menjelaskan checkpoint yang sedang dipakai aplikasi dan bukti pengujian lokal. Model aktif adalah EfficientNetB3 biner. Belum ada pengujian tambahan bersama tim hardware pada Pekan 12 (9–14 November 2026).
 
 ## Model aktif
 
 | Item | Nilai |
 |---|---|
-| Model | `models/fundus_b3_ordinal.keras` |
-| Versi | `fundus-b3-ordinal-aptos-v1` |
-| Ukuran | 44,606,662 byte (42.54 MiB) |
-| SHA-256 | `9300a18216d4972c17475770a36552fcd51219753a4151ff2339b11ccc7620e5` |
+| Model | `models/kaggle-binary/combined_dr_binary_b3_v1/best.keras` |
+| Versi | `combined-dr-binary-b3-v1-kaggle-v3` |
+| Ukuran | 44.497.131 byte (42,44 MiB), ekspor inferensi dalam Git |
+| SHA-256 | `d30299156bc174ce77da0aebe9ea5e1a7dd02faec560ae9e96512397a452ab45` |
 | Input | `[batch, 300, 300, 3]`, RGB float32, rentang 0–255 |
-| Output | `[batch, 5]`, probabilitas berjumlah satu |
-| Urutan output | `Mild`, `Moderate`, `No_DR`, `Proliferate_DR`, `Severe` |
+| Output | `[batch, 2]`, probabilitas berjumlah satu |
+| Urutan output | `No DR`, `DR` |
 | Runtime terverifikasi | Python 3.11.0, TensorFlow 2.21.0, Keras 3.14.1 |
-| Parameter | 10,789,683 |
 
-Label training `Proliferate_DR` dipetakan secara eksplisit menjadi label API `Proliferative_DR`.
+Label training `No DR` dipetakan menjadi label API `No_DR`. Model biner menyimpan `riskLevel=NOT_ASSESSED` karena tidak menentukan tingkat keparahan. Evaluasi 5.553 citra uji dan keterbatasannya ada di [hasil evaluasi biner](combined-training.md#hasil-evaluasi-model-biner).
+
+Ekspor inferensi mengeluarkan state optimizer dari checkpoint training 178.114.358 byte. Seluruh 499 bobot dan prediksi pada tiga citra lokal identik sebelum dan sesudah ekspor. Checkpoint training biner lengkap diarsipkan lokal di `data/model-archives/` dan tidak masuk Git. Checkpoint lama di folder `models/` sudah dihapus.
+
+Validasi paket biner pada 14 November 2026: 18/18 tes backend dan 13/13 tes Python lulus. Unggahan melalui klien simulasi lokal dengan model ekspor menghasilkan `COMPLETED`, prediksi `DR`, `isMock=false`, dan `riskLevel=NOT_ASSESSED`. Citra asli yang diambil kembali identik dengan berkas pengirim, metadata perangkat tersimpan, dan PDF berhasil dibuat (230.853 byte). Bukti lokal berada di `data/binary-packaging-check/` yang di-ignore. Ini merupakan uji software lokal, bukan uji kamera atau Wi-Fi bersama tim hardware.
 
 ## Alur aplikasi
 
@@ -26,14 +29,18 @@ PNG/JPEG
   → validasi dan penyimpanan original
   → preprocessing fundus-prep-v1
   → TensorFlow model
-  → validasi lima probabilitas
-  → processed PNG + hasil AI disimpan di SQLite
+  → validasi dua probabilitas
+  → processed PNG + hasil AI disimpan di SQLite atau MongoDB
   → endpoint examination mengembalikan hasil
 ```
 
 Mode dipilih melalui `AI_MODE`. Mode `model` tidak pernah beralih diam-diam ke mock ketika checkpoint hilang, gagal dimuat, atau menghasilkan output yang tidak valid.
 
-## Contoh hasil aktual
+## Catatan historis: integrasi model lima kelas
+
+Bagian berikut mencatat pengujian model ordinal terdahulu; angka dan contoh di bawah bukan hasil model biner aktif maupun pengujian hardware Pekan 12.
+
+### Contoh hasil aktual model lama
 
 Input referensi: `colored_images/Moderate/000c1434d8d7.png`
 

@@ -7,13 +7,14 @@ styles = getSampleStyleSheet()
 def get_primary_screening_table(screening_data):
     # Getting data from adapter.py
     stage = screening_data.get("severity_stage", "N/A")
+    stage = "No DR" if stage == "No_DR" else stage
     risk = screening_data.get("risk_level", "N/A")
     confidence = screening_data.get("confidence_score", "N/A")
     
     data = [
-        ["Severity Stage", "Risk Level", "Confidence Score"],
+        ["Klasifikasi DR" if risk == "NOT_ASSESSED" else "Severity Stage", "Risk Level", "Confidence Score"],
         [Paragraph(f"<b>{stage}</b>", styles['Normal']), 
-         Paragraph(f"<b>{risk}</b>", styles['Normal']), 
+         Paragraph(f"<b>{'Tidak dinilai' if risk == 'NOT_ASSESSED' else risk}</b>", styles['Normal']),
          Paragraph(f"<b>{confidence}</b>", styles['Normal'])]
     ]
     
@@ -79,7 +80,7 @@ def get_9_risk_categories_table(risk_list):
     t.setStyle(TableStyle(style_commands))
     return t
 
-def get_5_class_probabilities_table(probabilities, predicted_class=""):
+def get_class_probabilities_table(probabilities, predicted_class=""):
     data = [["Kelas Klasifikasi AI (DR)", "Probabilitas (Confidence)"]]
     style_commands = [
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#2c3e50")),
@@ -92,6 +93,7 @@ def get_5_class_probabilities_table(probabilities, predicted_class=""):
 
     labels = {
         "No_DR": "No DR",
+        "DR": "DR",
         "Mild": "Mild DR",
         "Moderate": "Moderate DR",
         "Severe": "Severe DR",

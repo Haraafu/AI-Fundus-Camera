@@ -107,6 +107,8 @@ test('hardware simulation CLI sends selected metadata to the receiver bound for 
   clearTimeout(timer);
   assert.equal(code, 0, stderr);
   assert.match(stdout, /COMPLETED/);
+  assert.match(stdout, /"receiptVerified": true/);
+  assert.match(stdout, /"requestId": "[a-f0-9-]{36}"/);
   const exams = (await f.request('/api/examinations?patientId=HW-TEST')).body;
   assert.equal(exams.length, 1);
   assert.equal(exams[0].eye, 'LEFT');

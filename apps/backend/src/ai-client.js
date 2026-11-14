@@ -45,12 +45,14 @@ export async function predict(config, buffer, mime) {
     throw new ApiError(502, code, 'AI service rejected the request.');
   }
   const p = result?.probabilities;
-  const index = CLASSES.indexOf(result?.prediction?.class);
-  if (result?.success !== true || index < 0 || !p || Object.keys(p).length !== 5 ||
-      !CLASSES.every(c => Number.isFinite(p[c]) && p[c] >= 0 && p[c] <= 1) ||
-      Math.abs(CLASSES.reduce((sum, c) => sum + p[c], 0) - 1) > 0.0001 ||
-      result.prediction.confidence !== p[CLASSES[index]] || p[CLASSES[index]] !== Math.max(...Object.values(p)) ||
-      !['LOW', 'MEDIUM', 'HIGH'].includes(result.riskLevel) ||
+  const binary = !!p && Object.hasOwn(p, 'DR');
+  const classes = binary ? ['No_DR', 'DR'] : CLASSES;
+  const predicted = result?.prediction?.class;
+  if (result?.success !== true || !classes.includes(predicted) || !p || Object.keys(p).length !== classes.length ||
+      !classes.every(c => Number.isFinite(p[c]) && p[c] >= 0 && p[c] <= 1) ||
+      Math.abs(classes.reduce((sum, c) => sum + p[c], 0) - 1) > 0.0001 ||
+      result.prediction.confidence !== p[predicted] || p[predicted] !== Math.max(...Object.values(p)) ||
+      (binary ? result.riskLevel !== 'NOT_ASSESSED' || result.isMock : !['LOW', 'MEDIUM', 'HIGH'].includes(result.riskLevel)) ||
       typeof result.modelVersion !== 'string' || !result.modelVersion || typeof result.isMock !== 'boolean' ||
       result.isMock !== ((config.aiMode ?? 'mock') === 'mock') ||
       (result.isMock ? result.modelVersion !== 'mock-v0' : result.modelVersion.startsWith('mock')) ||
@@ -76,7 +78,7 @@ export async function predict(config, buffer, mime) {
   if (result.isMock && result.explanation?.status === 'AVAILABLE') throw new ApiError(502, 'INVALID_AI_RESPONSE', 'Mock predictions cannot carry real Grad-CAM.');
   const explanation = await explanationOutput(result.explanation, result.prediction.class);
   return { explanation, result: { predictedClass: result.prediction.class, confidence: result.prediction.confidence,
-      probabilities: p, ...scoreRisk(result.prediction.class), modelVersion: result.modelVersion, isMock: result.isMock,
+      probabilities: p, ...scoreRisk(result.prediction.class, binary), modelVersion: result.modelVersion, isMock: result.isMock,
       preprocessingVersion: result.preprocessingVersion, explanation: explanation.metadata },
     processedBytes, preprocessing: { version: prep.version, parameters: prep.parameters, outputResolution: prep.outputResolution } };
 }
