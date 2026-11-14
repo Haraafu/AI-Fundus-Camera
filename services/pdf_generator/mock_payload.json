@@ -1,0 +1,23 @@
+{
+  "patient_id": "P-2026-081",
+  "examination_id": "5460fa35-54bd-4041-9955-13f9d75daf11",
+  "date": "2026-10-30",
+  "eye_side": "OD (Kanan)",
+  "images": {
+    "clahe": "assets/sample_clahe.png",
+    "gradcam": "assets/sample_gradcam.png"
+  },
+  "primary_screening": {
+    "severity_stage": "Moderate",
+    "risk_level": "Medium",
+    "confidence_score": "88%"
+  },
+  "probabilities": {
+    "No_DR": 0.02,
+    "Mild": 0.07,
+    "Moderate": 0.88,
+    "Severe": 0.02,
+    "Proliferative_DR": 0.01
+  },
+  "risk_categories": []
+}

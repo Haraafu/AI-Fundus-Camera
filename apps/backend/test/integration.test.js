@@ -175,3 +175,37 @@ test('invalid preprocessing, null response and a mock/model mode mismatch are re
     assert.equal((await f.store.get(exam.examinationId)).result, null);
   }
 });
+
+
+test('patients can be edited, renamed and deleted; examinations can be deleted with their files', async t => {
+  const f = await fixture(t);
+  const send = (method, path, body) => f.request(path, body === undefined ? { method } : { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  assert.equal((await send('POST', '/api/patients', { patientId: 'TEST-001', notes: 'kontrol' })).body.notes, 'kontrol');
+  const exam = await f.create();
+  const uploaded = await f.upload(exam.examinationId);
+  const original = join(f.config.uploadDir, uploaded.body.image.originalPath);
+
+  assert.equal((await send('PATCH', '/api/patients/TEST-001', { notes: 'x'.repeat(501) })).status, 400);
+  assert.equal((await send('PATCH', '/api/patients/TEST-001', { patientId: 'bad id' })).status, 400);
+  assert.equal((await send('POST', '/api/patients', { patientId: 'TEST-002' })).status, 201);
+  assert.equal((await send('PATCH', '/api/patients/TEST-001', { patientId: 'TEST-002' })).status, 409);
+  const renamed = await send('PATCH', '/api/patients/TEST-001', { patientId: 'TEST-003', notes: 'baru' });
+  assert.equal(renamed.status, 200);
+  assert.deepEqual([renamed.body.patientId, renamed.body.notes], ['TEST-003', 'baru']);
+  assert.equal((await f.request('/api/patients/TEST-001')).status, 404);
+  assert.equal((await f.request(`/api/examinations/${exam.examinationId}`)).body.patientId, 'TEST-003');
+  assert.equal((await f.request('/api/examinations?patientId=TEST-003')).body.length, 1);
+
+  const second = (await send('POST', '/api/examinations', { patientId: 'TEST-003', eye: 'LEFT', captureType: 'MACULA_CENTERED' })).body;
+  assert.equal((await send('DELETE', `/api/examinations/${second.examinationId}`)).status, 200);
+  assert.equal((await f.request(`/api/examinations/${second.examinationId}`)).status, 404);
+
+  const deleted = await send('DELETE', '/api/patients/TEST-003');
+  assert.equal(deleted.status, 200);
+  assert.equal(deleted.body.deletedExaminations, 1);
+  assert.equal((await f.request(`/api/examinations/${exam.examinationId}`)).status, 404);
+  assert.deepEqual((await f.request('/api/patients')).body.map(p => p.patientId), ['TEST-002']);
+  await delay(50);
+  assert.throws(() => readFileSync(original));
+  assert.equal((await send('DELETE', '/api/patients/TEST-003')).status, 404);
+});

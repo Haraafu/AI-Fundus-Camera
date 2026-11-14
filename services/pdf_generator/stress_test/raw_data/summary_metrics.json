@@ -1,0 +1,43 @@
+{
+  "timestamp": "2026-11-06T23:04:18.706076",
+  "environment": {
+    "python_version": "3.11.0",
+    "platform": "win32",
+    "module": "services/pdf_generator (v1.0-freeze)",
+    "gradcam_asset": "Retinal lesion JET heatmap overlay on sample_clahe.png (300x300)",
+    "sqlite_source": "data/fundus.sqlite (exam 5460fa35-54bd-4041-9955-13f9d75daf11)"
+  },
+  "scenario_summary": {
+    "total_scenarios": 14,
+    "passed_scenarios": 14,
+    "normal_count": 6,
+    "boundary_count": 3,
+    "fault_count": 5
+  },
+  "repeatability_50_runs": {
+    "iterations": 50,
+    "success_rate_pct": 100.0,
+    "mean_wall_ms": 226.02,
+    "median_wall_ms": 224.04,
+    "std_wall_ms": 10.16,
+    "min_wall_ms": 211.34,
+    "max_wall_ms": 260.79,
+    "p95_wall_ms": 249.76,
+    "p99_wall_ms": 258.29,
+    "mean_cpu_ms": 220.31,
+    "mean_peak_mem_kb": 4126.71,
+    "max_peak_mem_kb": 4126.71,
+    "deterministic_file_size_kb": 538.17,
+    "unique_file_sizes_count": 1
+  },
+  "concurrent_burst_10_runs": {
+    "num_requests": 10,
+    "max_workers": 4,
+    "success_count": 10,
+    "total_wall_s": 2.577,
+    "throughput_req_per_sec": 3.88,
+    "avg_cli_ms": 865.11,
+    "min_cli_ms": 832.34,
+    "max_cli_ms": 899.55
+  }
+}

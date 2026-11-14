@@ -3,16 +3,29 @@ import sys
 import argparse
 from config import create_document_canvas
 from components import get_header_and_disclaimer, get_metadata_table, get_image_table
-from dynamic_components import get_primary_screening_table, get_9_risk_categories_table, get_5_class_probabilities_table
+from dynamic_components import (
+    get_primary_screening_table, 
+    get_5_class_probabilities_table, 
+    get_clinical_recommendations_table
+)
 from adapter import load_data, get_safe_value
 from reportlab.platypus import Spacer
 
 def resolve_path(filepath):
-    # Resolves relative paths based on the location of this script, not the terminal CWD.
+    if not filepath or not isinstance(filepath, str) or filepath == "invalid_path":
+        return None
+    if os.path.isabs(filepath):
+        return filepath
+    # Check if exists relative to current working directory
+    if os.path.exists(filepath):
+        return os.path.abspath(filepath)
+    # Check if exists relative to script directory
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    if not os.path.isabs(filepath):
-        return os.path.join(base_dir, filepath)
-    return filepath
+    candidate = os.path.join(base_dir, filepath)
+    if os.path.exists(candidate):
+        return candidate
+    # Default for new files (e.g. output PDF): resolve relative to CWD
+    return os.path.abspath(filepath)
 
 def main():
     parser = argparse.ArgumentParser(description="Generate Fundus AI PDF Report")
@@ -35,26 +48,25 @@ def main():
     # 2. Build Document Flowables
     story.extend(get_header_and_disclaimer())
     story.append(get_metadata_table(data)) 
-    story.append(Spacer(1, 15))
+    story.append(Spacer(1, 9))
     
     screening_data = data.get("primary_screening", {})
     story.append(get_primary_screening_table(screening_data))
-    story.append(Spacer(1, 15))
+    story.append(Spacer(1, 9))
     
     img_clahe = resolve_path(get_safe_value(data, ["images", "clahe"], "invalid_path"))
     img_gradcam = resolve_path(get_safe_value(data, ["images", "gradcam"], "invalid_path"))
     story.append(get_image_table(img_clahe, img_gradcam))
-    story.append(Spacer(1, 15))
+    story.append(Spacer(1, 9))
 
-    # the 5 Class DR Probabilities Table
+    # 5-Class DR Probabilities Table
     probabilities = data.get("probabilities", {})
     predicted_class = screening_data.get("severity_stage", "")
     story.append(get_5_class_probabilities_table(probabilities, predicted_class))
-    story.append(Spacer(1, 15))
+    story.append(Spacer(1, 9))
 
-    # 9 Category Table, shows placeholder kalau kosong
-    risk_list = data.get("risk_categories", [])
-    story.append(get_9_risk_categories_table(risk_list))
+    # ICDR Clinical Recommendations & Follow-Up
+    story.append(get_clinical_recommendations_table(predicted_class))
     
     # 3. Render
     try:
