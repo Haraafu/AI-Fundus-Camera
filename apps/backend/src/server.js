@@ -8,6 +8,10 @@ const integer = (key, fallback) => {
   return value;
 };
 const databaseUrl = process.env.DATABASE_URL?.trim();
+if (!databaseUrl) {
+  console.error('LUXORA login requires MongoDB. Configure DATABASE_URL in .env; SQLite is available only to isolated integration tests.');
+  process.exit(1);
+}
 let configuredStore;
 if (databaseUrl) {
   try {
@@ -19,7 +23,7 @@ if (databaseUrl) {
       'For TLS/server-selection failures, check Atlas Network Access for your current public IP,',
       'cluster availability, and firewall/VPN access to the cluster on TCP 27017.',
       'Also verify DATABASE_URL and database credentials. Do not disable TLS certificate validation.',
-      'For intentional local-only use, set DATABASE_URL= in .env, then run npm run backend again.'
+      'LUXORA accounts require MongoDB; configure DATABASE_URL before starting the backend.'
     ].join('\n'));
     process.exit(1);
   }
@@ -30,11 +34,17 @@ const { app, store } = createApp({
   uploadDir: resolve(process.env.UPLOAD_DIR || 'data/uploads'),
   aiUrl: process.env.AI_SERVICE_URL || 'http://127.0.0.1:8000',
   aiMode: process.env.AI_MODE || 'mock',
-  aiTimeout: integer('AI_TIMEOUT_MS', 15000), maxUploadBytes: integer('MAX_UPLOAD_BYTES', 10485760),
+  aiTimeout: integer('AI_TIMEOUT_MS', 90000), maxUploadBytes: integer('MAX_UPLOAD_BYTES', 10485760),
   onDeviceEvent: event => console.log(JSON.stringify(event))
 });
-const server = app.listen(integer('BACKEND_PORT', 3001), process.env.BACKEND_HOST || '127.0.0.1', () =>
-  console.log('Fundus backend listening', server.address(), `storage=${store.type || 'sqlite'}`));
+const server = app.listen(integer('BACKEND_PORT', 3001), process.env.BACKEND_HOST || '127.0.0.1', error => {
+  if (error) {
+    console.error(`LUXORA could not bind the backend port (${error.code || 'LISTEN_FAILED'}). Stop the existing backend or choose another BACKEND_PORT.`);
+    void store.close().finally(() => process.exit(1));
+    return;
+  }
+  console.log('LUXORA backend listening', server.address(), `storage=${store.type}`);
+});
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => server.close(async () => {
   await store.close();
   process.exit(0);

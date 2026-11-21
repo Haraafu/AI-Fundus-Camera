@@ -1,5 +1,8 @@
 # Antarmuka perangkat kamera
 
+**Authentication update:** every camera API request now requires `Authorization: Bearer <camera-token>`. Generate a seven-day token in your signed-in LUXORA account using **Camera token**. Uploads belong to that account. See [authentication](authentication.md). For the CLI set `$env:LUXORA_DEVICE_TOKEN` first. Legacy unauthenticated examples below require this header.
+
+
 Backend menerima citra melalui HTTP multipart. MQTT dan integrasi kamera fisik belum menjadi bagian implementasi ini. Klien `ESP32-SIM-01` menyimulasikan urutan pengiriman kamera, sedangkan inferensi tetap menggunakan model aktual apabila `AI_MODE=model`.
 
 ## Pembagian tanggung jawab
@@ -16,7 +19,7 @@ Transport foto menggunakan HTTP multipart/form-data. Wi-Fi adalah koneksi jaring
 4. Dari perangkat lain di jaringan yang sama, buka `http://<IP-LAPTOP>:3001/health`. Lanjutkan dengan `/api/system`, pastikan `aiReady=true`, lalu buka `/api/device-contract` untuk kontrak dan batas ukuran aktual.
 5. Jika akses terhalang, periksa profil jaringan privat dan izin Windows Firewall untuk Node/port backend pada jaringan tersebut. Guest Wi-Fi atau AP client isolation dapat mencegah komunikasi antarklien. Gunakan jaringan uji atau hotspot yang mengizinkan akses antarklien. Tidak diperlukan port forwarding router atau membuka port AI 8000/8001 ke jaringan.
 
-Alamat server dapat berubah setelah laptop tersambung ulang. Konfirmasi IPv4 sebelum uji bersama. Layanan ini adalah prototipe lokal tanpa autentikasi atau HTTPS, sehingga gunakan jaringan uji tepercaya dan kode pasien anonim.
+Alamat server dapat berubah setelah laptop tersambung ulang. Konfirmasi IPv4 sebelum uji bersama. Layanan ini adalah prototipe lokal dengan autentikasi akun; HTTPS disediakan oleh reverse proxy, sehingga gunakan jaringan uji tepercaya dan kode pasien anonim.
 
 `GET /api/device-contract` mengembalikan versi kontrak `fundus-device-http-v1`, endpoint, nama field, batas unggahan, dan kebijakan retry. Endpoint `/health` hanya menguji backend hidup. Kesiapan AI diperiksa melalui `/api/system`.
 
@@ -46,14 +49,15 @@ Jika pemeriksaan sudah dibuat dari dashboard, gunakan `examinationId` yang sama.
 
 ```powershell
 $base = 'http://192.168.1.20:3001'
-Invoke-RestMethod "$base/health"
-Invoke-RestMethod "$base/api/system"
+$headers = @{ Authorization = "Bearer $env:LUXORA_DEVICE_TOKEN" }
+Invoke-RestMethod "$base/health" -Headers $headers
+Invoke-RestMethod "$base/api/system" -Headers $headers
 $metadata = @{ patientId = 'HW-DEMO-001'; eye = 'RIGHT'; captureType = 'MACULA_CENTERED' }
-$exam = Invoke-RestMethod "$base/api/examinations" -Method Post -ContentType 'application/json' -Body ($metadata | ConvertTo-Json)
+$exam = Invoke-RestMethod "$base/api/examinations" -Headers $headers -Method Post -ContentType 'application/json' -Body ($metadata | ConvertTo-Json)
 $imagePath = 'C:\captures\fundus.jpg'
 $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
-curl.exe --connect-timeout 5 --max-time 180 -sS -X POST "$base/api/examinations/$($exam.examinationId)/images" -F "image=@$imagePath;type=image/jpeg" -F 'device_id=CAMERA-01' -F 'eye=RIGHT' -F 'capture_type=MACULA_CENTERED' -F "capture_timestamp=$timestamp"
-Invoke-RestMethod "$base/api/examinations/$($exam.examinationId)"
+curl.exe -H "Authorization: Bearer $env:LUXORA_DEVICE_TOKEN" --connect-timeout 5 --max-time 180 -sS -X POST "$base/api/examinations/$($exam.examinationId)/images" -F "image=@$imagePath;type=image/jpeg" -F 'device_id=CAMERA-01' -F 'eye=RIGHT' -F 'capture_type=MACULA_CENTERED' -F "capture_timestamp=$timestamp"
+Invoke-RestMethod "$base/api/examinations/$($exam.examinationId)" -Headers $headers
 ```
 
 Pada PNG, ubah MIME menjadi `image/png`. Respons berhasil adalah HTTP 200 dengan `status=COMPLETED`, `image`, dan `result`. Upload bersifat sinkron, sehingga koneksi menunggu AI selesai. Sesuaikan waktu tunggu perangkat minimal dengan `recommendedClientTimeoutMs` pada kontrak. Hasil dapat dibuka di `/examinations/<examinationId>` dan PDF melalui `/api/examinations/<examinationId>/report`.
@@ -87,7 +91,7 @@ npm run device:mock -- "colored_images/Severe/299086c6d1b5.png" DEMO-RECORDING E
 
 Tambahkan `--watch` untuk mempertahankan heartbeat setelah pengiriman berhasil. Hanya satu citra yang diunggah. Tekan Ctrl+C untuk menghentikannya.
 
-Tujuan dapat diubah dengan `BACKEND_URL`. Untuk LAN, atur `BACKEND_HOST` ke alamat antarmuka yang sesuai, izinkan port backend pada jaringan privat, dan gunakan IP laptop pada kamera. Pengujian LAN dan perangkat fisik harus dilakukan terpisah. API ini masih untuk prototipe lokal tanpa autentikasi.
+Tujuan dapat diubah dengan `BACKEND_URL`. Untuk LAN, atur `BACKEND_HOST` ke alamat antarmuka yang sesuai, izinkan port backend pada jaringan privat, dan gunakan IP laptop pada kamera. Pengujian LAN dan perangkat fisik harus dilakukan terpisah. API ini masih untuk prototipe lokal dengan autentikasi akun.
 
 Contoh dari laptop pengirim di jaringan Wi-Fi:
 

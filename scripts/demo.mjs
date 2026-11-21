@@ -3,9 +3,12 @@ import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
-// Explicit offline demo uses its own SQLite database; Atlas configuration stays intact.
-const env = { ...process.env, AI_MODE: 'model', DATABASE_URL: '',
-  DATABASE_PATH: resolve('data/demo/fundus.sqlite'), UPLOAD_DIR: resolve('data/demo/uploads'),
+// Demo uses the configured MongoDB accounts and real model.
+if (!process.env.DATABASE_URL?.trim()) {
+  console.error('LUXORA demo requires DATABASE_URL for account-scoped MongoDB storage.');
+  process.exit(1);
+}
+const env = { ...process.env, AI_MODE: 'model',
   AI_TIMEOUT_MS: '60000', BACKEND_HOST: '127.0.0.1', AI_SERVICE_HOST: '127.0.0.1' };
 const aiPort = env.AI_SERVICE_PORT || '8000', backendPort = env.BACKEND_PORT || '3001';
 env.AI_SERVICE_URL = `http://127.0.0.1:${aiPort}`;
@@ -44,5 +47,5 @@ for (let i = 0; i < 120 && !stopping; i++) {
 if (!ready) { console.error('Model did not become ready. Check Python dependencies and MODEL_PATH.'); stop(1); }
 else {
   start(process.execPath, ['apps/backend/src/server.js']);
-  console.log(`Offline demo (SQLite, real model): http://127.0.0.1:${backendPort}/dashboard`);
+  console.log(`LUXORA demo (MongoDB accounts, real model): http://127.0.0.1:${backendPort}/login`);
 }

@@ -4,7 +4,7 @@ export const UPLOAD_FIELDS = ['eye', 'capture_type', 'device_id', 'capture_times
 export function deviceContract(config) {
   return {
     version: DEVICE_CONTRACT_VERSION,
-    transport: 'HTTP multipart/form-data over local Wi-Fi/LAN',
+    transport: 'HTTP(S) multipart/form-data over local Wi-Fi/LAN or an HTTPS gateway',
     health: '/health', readiness: '/api/system',
     createExamination: { method: 'POST', path: '/api/examinations', contentType: 'application/json',
       required: ['patientId', 'eye', 'captureType'],
@@ -20,8 +20,12 @@ export function deviceContract(config) {
     getExamination: { method: 'GET', path: '/api/examinations/{examinationId}' },
     telemetry: { method: 'POST', path: '/api/devices/{deviceId}/status',
       states: ['IDLE', 'READY', 'CAPTURING', 'UPLOADING', 'ERROR'], heartbeatIntervalMs: 15000 },
-    examinationStates: ['CREATED', 'IMAGE_RECEIVED', 'PROCESSING', 'COMPLETED', 'FAILED'],
-    authentication: 'none; trusted local prototype network only',
+    imageValidation: { preflight: '/api/images/validate', method: 'POST', fileField: 'image',
+      requiredOnEveryUpload: true, rejectedHttpStatus: 422, errors: ['NON_FUNDUS_IMAGE', 'FUNDUS_IMAGE_UNCERTAIN'],
+      unavailableHttpStatus: 503, unavailableCode: 'IMAGE_VALIDATOR_UNAVAILABLE',
+      rejection: 'No image is stored or analyzed; the examination remains CREATED and can receive a corrected fundus photo.' },
+    examinationStates: ['CREATED', 'IMAGE_RECEIVED', 'PROCESSING', 'COMPLETED', 'FAILED', 'REJECTED'],
+    authentication: 'Sign in to LUXORA. Browsers use an HttpOnly session cookie; ESP clients use Authorization: Bearer <device token>. Create a 7-day device token with POST /api/auth/device-token from your signed-in account. All records belong to that account.',
     mqttImplemented: false
   };
 }

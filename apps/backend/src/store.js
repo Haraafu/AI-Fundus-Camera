@@ -101,114 +101,15 @@ export function createSqliteStore(path) {
 
 export const createStore = createSqliteStore;
 
-export async function createMongoStore(url, databaseName = 'ai_fundus') {
-  const client = new MongoClient(url, { appName: 'ai-fundus-camera' });
-  await client.connect();
-  const database = client.db(databaseName);
-  const patients = database.collection('patients');
-  const examinations = database.collection('examinations');
-  const fundusImages = database.collection('fundus_images');
-  const aiResults = database.collection('ai_results');
-  await client.db('admin').command({ ping: 1 });
-
-  const get = async id => {
-    const exam = await examinations.findOne({ _id: id });
-    if (!exam) return null;
-    const { _id, ...document } = exam;
-    return document;
-  };
-  async function save(exam) {
-    const session = client.startSession();
-    try {
-      await session.withTransaction(async () => {
-        await patients.updateOne(
-          { _id: exam.patientId },
-          { $setOnInsert: { createdAt: exam.createdAt } },
-          { upsert: true, session }
-        );
-        await examinations.replaceOne(
-          { _id: exam.examinationId },
-          { _id: exam.examinationId, ...structuredClone(exam) },
-          { upsert: true, session }
-        );
-        if (exam.image) {
-          await fundusImages.replaceOne(
-            { _id: exam.image.imageId },
-            { _id: exam.image.imageId, examinationId: exam.examinationId, ...structuredClone(exam.image) },
-            { upsert: true, session }
-          );
-        }
-        if (exam.result) {
-          await aiResults.replaceOne(
-            { _id: exam.examinationId },
-            { _id: exam.examinationId, ...structuredClone(exam.result) },
-            { upsert: true, session }
-          );
-        } else {
-          await aiResults.deleteOne({ _id: exam.examinationId }, { session });
-        }
-      });
-    } finally {
-      await session.endSession();
-    }
+export async function createMongoStore(url, databaseName = 'ai_fundus', options = {}) {
+  const client = new MongoClient(url, { appName: 'luxora', ...(!/serverSelectionTimeoutMS=/i.test(url) ? { serverSelectionTimeoutMS: 10000 } : {}) });
+  try {
+    await client.connect();
+    await client.db('admin').command({ ping: 1 });
+    const { initializeMongoStore } = await import('./mongo-store.js');
+    return await initializeMongoStore(client, client.db(databaseName), options);
+  } catch (error) {
+    await client.close();
+    throw error;
   }
-
-  const interrupted = await examinations.find({ status: { $in: ['IMAGE_RECEIVED', 'PROCESSING'] } }).toArray();
-  for (const stored of interrupted) {
-    const { _id, ...exam } = stored;
-    exam.status = 'FAILED';
-    exam.error = { code: 'PROCESS_INTERRUPTED', message: 'Backend restarted during processing.' };
-    exam.statusHistory.push({ status: 'FAILED', timestamp: new Date().toISOString() });
-    await save(exam);
-  }
-  const listExaminations = async patientId => (await examinations.find(patientId ? { patientId } : {})
-    .sort({ createdAt: -1 }).toArray()).map(({ _id, ...document }) => document);
-  const patientDoc = doc => doc ? { patientId: doc._id, createdAt: doc.createdAt, notes: doc.notes ?? '' } : null;
-  const listPatients = async () => (await patients.find().sort({ createdAt: -1 }).toArray()).map(patientDoc);
-  const getPatient = async patientId => patientDoc(await patients.findOne({ _id: patientId }));
-  const savePatient = async patient => {
-    await patients.updateOne({ _id: patient.patientId }, { $setOnInsert: { createdAt: patient.createdAt, notes: patient.notes ?? '' } }, { upsert: true });
-    return getPatient(patient.patientId);
-  };
-  const inTransaction = async fn => {
-    const session = client.startSession();
-    try { let value; await session.withTransaction(async () => { value = await fn(session); }); return value; }
-    finally { await session.endSession(); }
-  };
-  const updatePatient = (patientId, changes) => inTransaction(async session => {
-    const current = await patients.findOne({ _id: patientId }, { session });
-    if (!current) return null;
-    const nextId = changes.patientId ?? patientId, notes = changes.notes ?? current.notes ?? '';
-    if (nextId !== patientId) {
-      await patients.insertOne({ _id: nextId, createdAt: current.createdAt, notes }, { session });
-      await examinations.updateMany({ patientId }, { $set: { patientId: nextId } }, { session });
-      await patients.deleteOne({ _id: patientId }, { session });
-    } else {
-      await patients.updateOne({ _id: patientId }, { $set: { notes } }, { session });
-    }
-    return patientDoc(await patients.findOne({ _id: nextId }, { session }));
-  });
-  const removeExamination = async (id, session) => {
-    await aiResults.deleteOne({ _id: id }, { session });
-    await fundusImages.deleteMany({ examinationId: id }, { session });
-    await examinations.deleteOne({ _id: id }, { session });
-  };
-  const deleteExamination = id => inTransaction(async session => {
-    const exam = await examinations.findOne({ _id: id }, { session });
-    if (!exam) return null;
-    await removeExamination(id, session);
-    const { _id, ...document } = exam;
-    return document;
-  });
-  const deletePatient = patientId => inTransaction(async session => {
-    if (!await patients.findOne({ _id: patientId }, { session })) return null;
-    const exams = (await examinations.find({ patientId }, { session }).toArray()).map(({ _id, ...document }) => document);
-    for (const exam of exams) await removeExamination(exam.examinationId, session);
-    await patients.deleteOne({ _id: patientId }, { session });
-    return exams;
-  });
-  return {
-    type: 'mongodb', get, save, listExaminations, listPatients, getPatient, savePatient, updatePatient,
-    deletePatient, deleteExamination, close: () => client.close()
-  };
 }

@@ -1,6 +1,9 @@
-# Kontrak API
+# API contract
 
-Planner final menjadi acuan jadwal; PRD menjadi acuan arsitektur. Endpoint HTTP memakai loopback secara default. Mode penerima LAN tersedia melalui `npm run backend:lan`. Autentikasi, HTTPS, dan quality gate klinis belum diimplementasikan.
+All `/api/*` clinical routes now require a signed-in account or a Bearer camera token. Data is scoped to that account. See [authentication](authentication.md) for registration, sessions, CSRF headers, and device tokens. `/health` remains public.
+
+
+Planner final menjadi acuan jadwal; PRD menjadi acuan arsitektur. Endpoint HTTP memakai loopback secara default. Mode penerima LAN tersedia melalui `npm run backend:lan`. Autentikasi akun dan validator jenis gambar lokal tersedia; HTTPS disediakan reverse proxy. Validator jenis gambar bukan quality gate klinis.
 
 `GET /api/device-contract`: kontrak mesin untuk integrasi perangkat, termasuk endpoint unggahan, nama field, batas ukuran aktual, timeout klien, dan kebijakan retry. Lihat [panduan perangkat](devices.md). Respons backend membawa header `X-Request-Id` untuk penelusuran.
 
@@ -86,3 +89,27 @@ Tanpa `DATABASE_URL`, backend memakai SQLite bawaan Node: patients(patientId PK,
 ## Unduh PDF
 
 `GET /api/examinations/:id/report` mengunduh PDF untuk status COMPLETED. Respons berupa `application/pdf` dengan attachment dan `Cache-Control: private, no-store`. Status 409 berarti pemeriksaan belum selesai, 404 jika tidak ditemukan, dan 500 REPORT_FAILED jika generator gagal. Hasil pemeriksaan tidak diubah oleh kegagalan ekspor. Backend memakai ReportLab melalui `REPORT_PYTHON`, `PYTHON`, atau `python` di PATH. Grad-CAM yang tersedia disertakan, sedangkan pemeriksaan lama memakai placeholder.
+
+## Regenerate Grad-CAM for a saved examination
+
+`POST /api/examinations/:id/explanation` requires the owner account and a
+completed, non-mock examination. It reuses the saved original image and
+regenerates only the explanation. The model version, predicted class,
+probabilities, and processed image must match the stored examination; otherwise
+it returns 409 `EXPLANATION_MODEL_MISMATCH`. Prediction values and examination
+dates are never replaced. Already available explanations return without
+re-running inference. The web result page exposes **Generate Grad-CAM** when
+an actual completed examination has no overlay.
+
+The active model predicts **DR / No DR**, without severity grading. The
+dashboard's **DR predictions** panel includes only examinations with the `DR`
+class; an empty panel says no examinations were classified as DR, not that the
+model returned the `No_DR` class.
+
+## Image type preflight
+
+Authenticated `POST /api/images/validate` accepts multipart `image`. It returns
+accepted input validation or 422 `NON_FUNDUS_IMAGE` / `FUNDUS_IMAGE_UNCERTAIN`.
+A missing/unavailable validator returns 503 `IMAGE_VALIDATOR_UNAVAILABLE`. The
+final image upload always repeats validation before storage. See
+[image input validation](image-input-validation.md).

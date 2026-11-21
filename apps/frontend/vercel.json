@@ -1,0 +1,41 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "",
+  "buildCommand": "node build.mjs",
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/login",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/register",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/dashboard",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/devices",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/patients",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/patients/:patientId",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/examinations/new",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/examinations/:examinationId",
+      "destination": "/index.html"
+    }
+  ]
+}

@@ -4,7 +4,7 @@ const [imagePath, base = 'http://127.0.0.1:3001'] = process.argv.slice(2);
 if (!imagePath) throw new Error('Usage: npm run smoke -- path/to/fundus.png [backend URL]');
 const expectedMock = (process.env.AI_MODE || 'mock').trim().toLowerCase() === 'mock';
 async function request(path, options) {
-  const response = await fetch(base + path, options);
+  const response = await fetch(base + path, { ...options, headers: { ...options?.headers, ...(process.env.LUXORA_DEVICE_TOKEN ? { Authorization: `Bearer ${process.env.LUXORA_DEVICE_TOKEN}` } : {}) } });
   const body = await response.json();
   if (!response.ok) throw new Error(JSON.stringify(body));
   return body;

@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from test_fixture_server import TestImageValidator
 
 import cv2
 import numpy as np
@@ -19,6 +20,11 @@ from fundus.preprocessing import VERSION, crop_black_border, encode_png, model_i
 spec = importlib.util.spec_from_file_location("ai_app", Path(__file__).with_name("app.py"))
 ai_app = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ai_app)
+
+def test_app(*args, **kwargs):
+    kwargs.setdefault('image_validator', TestImageValidator())
+    return ai_app.create_app(*args, **kwargs)
+
 
 
 class AiServiceTests(unittest.TestCase):
@@ -65,7 +71,7 @@ class AiServiceTests(unittest.TestCase):
             map_probabilities([.23, .77], ['No DR', 'Mild'])
 
     def test_mock_preprocesses_but_still_marks_prediction_as_mock(self):
-        with TestClient(ai_app.create_app('mock')) as client:
+        with TestClient(test_app('mock')) as client:
             health = client.get('/ready')
             self.assertEqual(health.status_code, 200)
             self.assertFalse(health.json()['modelLoaded'])
@@ -79,7 +85,7 @@ class AiServiceTests(unittest.TestCase):
             np.testing.assert_array_equal(cv2.cvtColor(actual, cv2.COLOR_BGR2RGB), preprocess_bytes(self.png))
 
     def test_corrupt_and_mislabeled_uploads_are_rejected(self):
-        with TestClient(ai_app.create_app('mock')) as client:
+        with TestClient(test_app('mock')) as client:
             for content, mime in [(b'not an image', 'image/png'), (self.png, 'image/jpeg')]:
                 response = client.post('/predict', files={'image': ('fundus.png', content, mime)})
                 self.assertEqual(response.status_code, 400)
@@ -87,7 +93,7 @@ class AiServiceTests(unittest.TestCase):
 
     def test_missing_model_is_not_ready_and_never_returns_mock(self):
         missing = ROOT / 'models' / 'does-not-exist.keras'
-        with TestClient(ai_app.create_app('model', model_path=missing)) as client:
+        with TestClient(test_app('model', model_path=missing)) as client:
             health = client.get('/health')
             self.assertEqual(health.status_code, 200)
             self.assertEqual(health.json()['mode'], 'model')
@@ -105,7 +111,7 @@ class AiServiceTests(unittest.TestCase):
             model_path = Path(directory) / 'broken.keras'
             model_path.write_bytes(b'not a model')
             with patch.object(adapters, '_load_model', side_effect=RuntimeError('load failed')):
-                with TestClient(ai_app.create_app('model', model_path=model_path)) as client:
+                with TestClient(test_app('model', model_path=model_path)) as client:
                     health = client.get('/ready')
                     self.assertEqual(health.status_code, 503)
                     self.assertEqual(health.json()['errorCode'], 'MODEL_LOAD_FAILED')
@@ -126,7 +132,7 @@ class AiServiceTests(unittest.TestCase):
             model_path = Path(directory) / 'invalid-output.keras'
             model_path.write_bytes(b'test fixture')
             with patch.object(adapters, '_load_model', return_value=InvalidOutputModel()):
-                with TestClient(ai_app.create_app('model', model_path=model_path,
+                with TestClient(test_app('model', model_path=model_path,
                                                    model_version='invalid-output-test',
                                                    model_class_names=adapters.DEFAULT_MODEL_CLASSES)) as client:
                     self.assertEqual(client.get('/ready').status_code, 200)
@@ -137,7 +143,7 @@ class AiServiceTests(unittest.TestCase):
 
     def test_invalid_mode_cannot_silently_select_mock(self):
         with self.assertRaises(ValueError):
-            ai_app.create_app('typo')
+            test_app('typo')
 
 
 if __name__ == '__main__':

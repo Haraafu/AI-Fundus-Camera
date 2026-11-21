@@ -1,34 +1,44 @@
 <!doctype html>
-<html lang="id">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AI Fundus Camera · Sistem Skrining Retinopati Diabetik</title>
+  <title>LUXORA · Diabetic Retinopathy Screening</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23167563' stroke-width='2'%3E%3Cpath d='M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z'/%3E%3Ccircle cx='12' cy='12' r='3'/%3E%3C/svg%3E">
+  <script>
+    (() => {
+      let saved;
+      try { saved = localStorage.getItem('luxora-theme'); } catch {}
+      document.documentElement.dataset.theme = saved === 'light' || saved === 'dark'
+        ? saved : (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    })();
+  </script>
+  <script src="/theme.js" defer></script>
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
   <aside>
-    <a class="brand" href="/dashboard" aria-label="AI Fundus Camera, ke dashboard">
+    <a class="brand" href="/dashboard" aria-label="LUXORA, go to dashboard">
       <span class="brand-icon" aria-hidden="true">◉</span>
-      <span class="brand-text"><strong>AI Fundus Camera</strong><small>Skrining Retinopati Diabetik</small></span>
+      <span class="brand-text"><strong>LUXORA</strong><small>Diabetic Retinopathy Screening</small></span>
     </a>
     <div class="nav-label">MENU</div>
     <nav>
       <a href="/dashboard" data-nav="dashboard"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg><span>Dashboard</span></a>
-      <a href="/patients" data-nav="patients"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/></svg><span>Pasien</span></a>
-      <a href="/examinations/new" data-nav="examinations"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg><span>Pemeriksaan baru</span></a>
+      <a href="/patients" data-nav="patients"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/></svg><span>Patients</span></a>
+      <a href="/examinations/new" data-nav="examinations"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg><span>New examination</span></a>
     </nav>
+    <div id="account" class="account" hidden></div>
     <div class="aside-bottom">
-      <div><span class="online-dot"></span>Workspace riset lokal</div>
-      <p>AI Fundus Camera v0.3<br>Design Project · 2026</p>
+      <div><span class="online-dot"></span>Research workspace</div>
+      <p>LUXORA v0.3<br>Design Project · 2026</p>
     </div>
   </aside>
   <div class="workspace">
-    <header><span class="header-title">Sistem Skrining Retinopati Diabetik Berbasis AI</span><div id="system" class="system">Menghubungkan…</div></header>
-    <main id="main" aria-live="polite"><div class="loading">Memuat…</div></main>
-    <footer>Hasil merupakan skrining awal berbasis AI dan tidak menggantikan diagnosis tenaga medis.</footer>
+    <header><span class="header-title">AI-powered diabetic retinopathy screening</span><div class="header-actions"><div id="system" class="system">Connecting…</div><button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to dark mode" aria-pressed="false"><span aria-hidden="true">◐</span><span id="theme-label">Dark mode</span></button></div></header>
+    <main id="main" aria-live="polite"><div class="loading">Loading…</div></main>
+    <footer><span>AI screening results do not replace a diagnosis by a healthcare professional.</span><span class="copyright">&copy; 2026 Kelompok 6 Despro. All rights reserved.</span></footer>
   </div>
 </body>
 </html>

@@ -1,6 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -18,7 +19,7 @@ before(async () => {
   const url = await listen(probe), port = probe.address().port;
   await new Promise(r => probe.close(r));
   aiUrl = url;
-  ai = spawn(process.env.PYTHON || resolve('.venv/Scripts/python.exe'), ['services/ai-service/app.py'],
+  ai = spawn(process.env.PYTHON || resolve('.venv/Scripts/python.exe'), ['services/ai-service/test_fixture_server.py'],
     { env: { ...process.env, AI_MODE: 'mock', AI_SERVICE_PORT: String(port), AI_SERVICE_HOST: '127.0.0.1' }, stdio: 'pipe', windowsHide: true });
   let logs = '', spawnError;
   ai.on('error', e => { spawnError = e; });
@@ -35,7 +36,7 @@ after(() => ai?.kill());
 
 async function fixture(t, overrides = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'fundus-test-'));
-  const config = { databasePath: join(dir, 'db.sqlite'), uploadDir: join(dir, 'uploads'), aiUrl, aiTimeout: 3000, maxUploadBytes: 1024 * 1024, ...overrides };
+  const config = { allowUnauthenticatedTests: true, testImageValidator: async bytes => ({ version: 'fundus-input-v1', status: 'ACCEPTED', imageType: 'retinal_fundus' }), databasePath: join(dir, 'db.sqlite'), uploadDir: join(dir, 'uploads'), aiUrl, aiTimeout: 3000, maxUploadBytes: 1024 * 1024, ...overrides };
   const { app, store } = createApp(config);
   const server = createServer(app), base = await listen(server, overrides.testBindHost);
   t.after(async () => { server.closeAllConnections(); await new Promise(r => server.close(r)); await store.close(); rmSync(dir, { recursive: true, force: true }); });
@@ -259,7 +260,7 @@ test('patient history, private image retrieval and frontend work with persisted 
   assert.deepEqual(Buffer.from(await image.arrayBuffer()), png);
   const page = await fetch(`${f.base}/patients`);
   assert.equal(page.status, 200);
-  assert.match(await page.text(), /Fundus/);
+  assert.match(await page.text(), /LUXORA/);
 });
 
 test('risk categories are versioned and independent of inference', () => {
@@ -390,4 +391,141 @@ test('patient edit and deletion refuse in-progress examinations and preserve the
   }
   assert.equal((await f.store.get(exam.examinationId)).patientId, 'TEST-001');
   assert.ok(existsSync(join(f.config.uploadDir, completed.image.originalPath)));
+});
+
+async function explanationFixture(t) {
+  let calls = 0;
+  const payload = {
+    success: true, prediction: { class: 'DR', confidence: 0.8 }, probabilities: { No_DR: 0.2, DR: 0.8 },
+    riskLevel: 'NOT_ASSESSED', modelVersion: 'test-binary-v1', isMock: false, preprocessingVersion: 'fundus-prep-v1',
+    preprocessing: { version: 'fundus-prep-v1', mimeType: 'image/png', outputResolution: [300, 300],
+      parameters: {}, imageBase64: png.toString('base64') },
+    explanation: { status: 'UNAVAILABLE', method: 'Grad-CAM', version: 'gradcam-v1', reason: 'EXPLANATION_FAILED' }
+  };
+  const upstream = createServer((req, res) => {
+    calls++; req.resume(); res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(payload));
+  });
+  const url = await listen(upstream);
+  t.after(() => new Promise(resolve => upstream.close(resolve)));
+  const f = await fixture(t, { aiUrl: url, aiMode: 'model' });
+  const exam = await f.create();
+  assert.equal((await f.upload(exam.examinationId)).status, 200);
+  const available = () => { payload.explanation = {
+    status: 'AVAILABLE', method: 'Grad-CAM', version: 'gradcam-v2', scoreType: 'logit', targetClass: 'DR',
+    coordinateSpace: 'processed', layer: 'test/top_conv', outputResolution: [300, 300], mimeType: 'image/png',
+    imageBase64: png.toString('base64'), heatmapBase64: png.toString('base64')
+  }; };
+  return { ...f, exam, payload, available, calls: () => calls,
+    generate: () => f.request(`/api/examinations/${exam.examinationId}/explanation`, { method: 'POST' }) };
+}
+
+test('Grad-CAM regeneration stores private overlays while preserving prediction and original examination dates', async t => {
+  const f = await explanationFixture(t);
+  const previous = await f.store.get(f.exam.examinationId);
+  f.available();
+  const result = await f.generate();
+  assert.equal(result.status, 200);
+  assert.equal(result.body.result.explanation.status, 'AVAILABLE');
+  assert.equal(result.body.result.explanation.version, 'gradcam-v2');
+  assert.equal(result.body.result.explanation.scoreType, 'logit');
+  const { explanation: oldCam, ...oldPrediction } = previous.result;
+  const { explanation: newCam, ...newPrediction } = result.body.result;
+  assert.deepEqual(newPrediction, oldPrediction);
+  for (const key of ['status', 'createdAt', 'completedAt', 'statusHistory']) assert.deepEqual(result.body[key], previous[key]);
+  assert.equal(result.body.image.originalSha256, previous.image.originalSha256);
+  assert.equal(result.body.image.processedSha256, previous.image.processedSha256);
+  for (const variant of ['gradcam', 'heatmap']) {
+    const response = await fetch(`${f.base}/api/examinations/${f.exam.examinationId}/images/${variant}`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('cache-control'), 'private, no-store');
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), png);
+  }
+  const calls = f.calls();
+  assert.equal((await f.generate()).status, 200);
+  assert.equal(f.calls(), calls, 'Already available explanations do not rerun inference');
+});
+
+test('Grad-CAM regeneration rejects changed models, predictions and preprocessing without changing stored results', async t => {
+  const f = await explanationFixture(t);
+  const previous = await f.store.get(f.exam.examinationId);
+  f.available();
+  f.payload.modelVersion = 'different-model';
+  assert.equal((await f.generate()).body.error.code, 'EXPLANATION_MODEL_MISMATCH');
+  f.payload.modelVersion = 'test-binary-v1';
+  f.payload.prediction.confidence = 0.9; f.payload.probabilities = { No_DR: 0.1, DR: 0.9 };
+  assert.equal((await f.generate()).status, 409);
+  f.payload.prediction.confidence = 0.8; f.payload.probabilities = { No_DR: 0.2, DR: 0.8 };
+  f.payload.preprocessing.imageBase64 = (await sharp({ create: { width: 300, height: 300, channels: 3, background: '#ffffff' } }).png().toBuffer()).toString('base64');
+  assert.equal((await f.generate()).status, 409);
+  assert.deepEqual(await f.store.get(f.exam.examinationId), previous);
+  assert.equal((await fetch(`${f.base}/api/examinations/${f.exam.examinationId}/images/gradcam`)).status, 404);
+});
+
+test('Grad-CAM regeneration refuses incomplete and mock examinations and handles absent source images', async t => {
+  const mock = await fixture(t);
+  const exam = await mock.create();
+  const generate = () => mock.request(`/api/examinations/${exam.examinationId}/explanation`, { method: 'POST' });
+  assert.equal((await generate()).status, 409);
+  await mock.upload(exam.examinationId);
+  assert.equal((await generate()).body.error.code, 'EXPLANATION_NOT_AVAILABLE');
+  const real = await explanationFixture(t);
+  const stored = await real.store.get(real.exam.examinationId);
+  rmSync(join(real.config.uploadDir, stored.image.originalPath));
+  assert.equal((await real.generate()).body.error.code, 'IMAGE_NOT_FOUND');
+  assert.equal((await real.store.get(real.exam.examinationId)).status, 'COMPLETED');
+});
+
+test('semantic image rejection prevents saving and disease inference, including direct camera uploads; same examination can retry', async t => {
+  const form = new FormData(); form.append('image', new Blob([png], { type: 'image/png' }), 'fundus.png');
+  const acceptedPrediction = await (await fetch(aiUrl + '/predict', { method: 'POST', body: form })).json();
+  let reject = true, predictions = 0, validations = 0;
+  const upstream = createServer((req, res) => {
+    req.resume(); res.setHeader('Content-Type', 'application/json');
+    if (req.url === '/validate-image') {
+      validations++;
+      if (reject) {
+        res.statusCode = 422;
+        res.end(JSON.stringify({ success: false, error: { code: 'NON_FUNDUS_IMAGE', message: 'Image type check: map. Upload a retinal fundus photograph instead.' } }));
+      } else res.end(JSON.stringify({ success: true, inputValidation: acceptedPrediction.inputValidation }));
+    } else { predictions++; res.end(JSON.stringify(acceptedPrediction)); }
+  });
+  const url = await listen(upstream);
+  t.after(() => new Promise(resolve => upstream.close(resolve)));
+  const f = await fixture(t, { aiUrl: url, testImageValidator: null });
+  const preflight = await f.request('/api/images/validate', { method: 'POST', body: form });
+  assert.equal(preflight.status, 422); assert.equal(preflight.body.error.code, 'NON_FUNDUS_IMAGE');
+  assert.equal((await f.store.listExaminations()).length, 0);
+  const exam = await f.create();
+  const rejected = await f.upload(exam.examinationId);
+  assert.equal(rejected.status, 422); assert.match(rejected.body.error.message, /map/);
+  assert.equal(predictions, 0); assert.equal(validations, 2);
+  assert.equal((await f.store.get(exam.examinationId)).status, 'CREATED');
+  assert.equal((await f.store.get(exam.examinationId)).image, null);
+  assert.deepEqual(readdirSync(f.config.uploadDir), []);
+  reject = false;
+  const result = await f.upload(exam.examinationId);
+  assert.equal(result.status, 200); assert.equal(result.body.status, 'COMPLETED');
+  assert.equal(result.body.image.inputValidation.sourceSha256, createHash('sha256').update(png).digest('hex'));
+  assert.equal(predictions, 1);
+});
+
+test('unavailable or malformed input validation fails closed without storing any upload', async t => {
+  let mode = 'unavailable';
+  const upstream = createServer((req, res) => {
+    req.resume(); res.setHeader('Content-Type', 'application/json');
+    if (mode === 'unavailable') { res.statusCode = 503; res.end(JSON.stringify({ success: false, error: { code: 'IMAGE_VALIDATOR_UNAVAILABLE' } })); }
+    else res.end(JSON.stringify({ success: true, inputValidation: { version: 'fundus-input-v1', status: 'ACCEPTED', imageType: 'retinal_fundus', sourceSha256: 'wrong-image', matchingScore: 1 } }));
+  });
+  const url = await listen(upstream);
+  t.after(() => new Promise(resolve => upstream.close(resolve)));
+  const f = await fixture(t, { aiUrl: url, testImageValidator: null });
+  const exam = await f.create();
+  for (const scenario of ['unavailable', 'malformed']) {
+    mode = scenario;
+    const result = await f.upload(exam.examinationId);
+    assert.equal(result.status, 503); assert.equal(result.body.error.code, 'IMAGE_VALIDATOR_UNAVAILABLE');
+    assert.equal((await f.store.get(exam.examinationId)).status, 'CREATED');
+    assert.equal((await f.store.get(exam.examinationId)).result, null);
+    assert.deepEqual(readdirSync(f.config.uploadDir), []);
+  }
 });

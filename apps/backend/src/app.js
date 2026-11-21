@@ -1,13 +1,14 @@
 import express from 'express';
+import { createAuthentication } from './auth.js';
 import multer from 'multer';
 import sharp from 'sharp';
 import { randomUUID, createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { unlink } from 'node:fs/promises';
+import { unlink, readFile } from 'node:fs/promises';
 import { join, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createStore } from './store.js';
-import { ApiError, predict } from './ai-client.js';
+import { ApiError, predict, validateFundus } from './ai-client.js';
 
 import { createReportHandler } from './report.js';
 import { deviceContract, UPLOAD_FIELDS, validCaptureTimestamp } from './device-contract.js';
@@ -18,6 +19,12 @@ export function createApp(config) {
   const app = express(), store = config.store ?? createStore(config.databasePath), busy = new Set(), devices = new Map();
   mkdirSync(config.uploadDir, { recursive: true });
   app.disable('x-powered-by');
+  app.set('trust proxy', 'loopback');
+  const authentication = store.auth ? createAuthentication(store) : null;
+  const validateInput = config.allowUnauthenticatedTests && config.testImageValidator
+    ? config.testImageValidator : (bytes, mime) => validateFundus(config, bytes, mime);
+  if (!authentication && !config.allowUnauthenticatedTests) throw new Error('LUXORA requires a MongoDB account store');
+
   app.use((req, res, next) => {
     req.requestId = randomUUID();
     res.set('X-Request-Id', req.requestId);
@@ -31,6 +38,10 @@ export function createApp(config) {
   });
   app.use(express.json({ limit: '16kb' }));
   app.get('/health', (req, res) => res.json({ status: 'healthy', service: 'backend' }));
+  if (authentication) {
+    app.use('/api/auth', authentication.router);
+    app.use('/api', (req, res, next) => { res.set('Cache-Control', 'private, no-store'); next(); }, authentication.protectMutation, authentication.authenticate);
+  } else app.use('/api', (req, res, next) => { req.store = store; next(); });
   app.get('/api/device-contract', (req, res) => res.json(deviceContract(config)));
   app.get('/api/system', async (req, res) => {
     let aiReady = false;
@@ -41,31 +52,33 @@ export function createApp(config) {
     } catch {}
     res.json({ storage: store.type || 'sqlite', aiMode: config.aiMode || 'mock', aiReady });
   });
-  app.get('/api/devices', (req, res) => res.json([...devices.values()].map(device => ({ ...device,
+  app.get('/api/devices', (req, res) => res.json([...devices.values()].filter(device => device.ownerId === req.user?.id).map(({ ownerId, ...device }) => ({ ...device,
     isOnline: Date.now() - Date.parse(device.lastSeen) < 60000 }))));
   app.post('/api/devices/:deviceId/status', async (req, res) => {
+    const deviceKey = `${req.user?.id || 'test'}:${req.params.deviceId}`;
     const deviceId = req.params.deviceId, { status, examinationId, message } = req.body ?? {};
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(deviceId) || !['IDLE', 'READY', 'CAPTURING', 'UPLOADING', 'ERROR'].includes(status) ||
-        (examinationId !== undefined && (typeof examinationId !== 'string' || !await store.get(examinationId))) ||
+        (examinationId !== undefined && (typeof examinationId !== 'string' || !await req.store.get(examinationId))) ||
         (message !== undefined && (typeof message !== 'string' || message.length > 240))) {
       throw new ApiError(400, 'INVALID_DEVICE_STATUS', 'Invalid device status or examination reference.');
     }
-    if (!devices.has(deviceId) && devices.size >= 100) throw new ApiError(429, 'DEVICE_LIMIT', 'Device registry is full.');
-    const previous = devices.get(deviceId), timestamp = new Date().toISOString();
+    if (!devices.has(deviceKey) && devices.size >= 100) throw new ApiError(429, 'DEVICE_LIMIT', 'Device registry is full.');
+    const previous = devices.get(deviceKey), timestamp = new Date().toISOString();
     const statusHistory = previous?.status === status ? previous.statusHistory
       : [...(previous?.statusHistory || []), { status, timestamp }].slice(-12);
-    const device = { deviceId, status, lastSeen: timestamp, examinationId: examinationId || null,
+    const device = { ownerId: req.user?.id, deviceId, status, lastSeen: timestamp, examinationId: examinationId || null,
       message: message || null, statusHistory };
-    devices.set(deviceId, device);
-    res.json({ ...device, isOnline: true });
+    devices.set(deviceKey, device);
+    const { ownerId, ...publicDevice } = device;
+    res.json({ ...publicDevice, isOnline: true });
   });
-  app.get('/api/patients', async (req, res) => res.json(await store.listPatients()));
+  app.get('/api/patients', async (req, res) => res.json(await req.store.listPatients()));
   app.post('/api/patients', async (req, res) => {
     const patientId = req.body?.patientId;
     if (typeof patientId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(patientId)) {
       throw new ApiError(400, 'INVALID_METADATA', 'Provide an anonymous patient code (1–64 characters).');
     }
-    res.status(201).json(await store.savePatient({ patientId, createdAt: new Date().toISOString(), notes: validNotes(req.body?.notes) ?? '' }));
+    res.status(201).json(await req.store.savePatient({ patientId, createdAt: new Date().toISOString(), notes: validNotes(req.body?.notes) ?? '' }));
   });
   const validPatientId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value);
   function validNotes(notes) {
@@ -84,9 +97,9 @@ export function createApp(config) {
   };
   async function findPatient(req, res, next) {
     if (!validPatientId(req.params.patientId)) throw new ApiError(400, 'INVALID_METADATA', 'Invalid patient code.');
-    req.patient = await store.getPatient(req.params.patientId);
+    req.patient = await req.store.getPatient(req.params.patientId);
     if (!req.patient) throw new ApiError(404, 'PATIENT_NOT_FOUND', 'Patient not found.');
-    req.patientExams = await store.listExaminations(req.params.patientId);
+    req.patientExams = await req.store.listExaminations(req.params.patientId);
     if (req.method !== 'GET' && req.patientExams.some(isBusy)) {
       throw new ApiError(409, 'PATIENT_BUSY', 'An examination for this patient is still processing.');
     }
@@ -98,13 +111,13 @@ export function createApp(config) {
     if (patientId !== undefined && !validPatientId(patientId)) {
       throw new ApiError(400, 'INVALID_METADATA', 'Provide an anonymous patient code (1–64 characters).');
     }
-    if (patientId && patientId !== req.patient.patientId && await store.getPatient(patientId)) {
+    if (patientId && patientId !== req.patient.patientId && await req.store.getPatient(patientId)) {
       throw new ApiError(409, 'PATIENT_EXISTS', 'Another patient already uses this code.');
     }
-    res.json(await store.updatePatient(req.patient.patientId, { patientId, notes }));
+    res.json(await req.store.updatePatient(req.patient.patientId, { patientId, notes }));
   });
   app.delete('/api/patients/:patientId', findPatient, async (req, res) => {
-    const deleted = await store.deletePatient(req.patient.patientId) ?? [];
+    const deleted = await req.store.deletePatient(req.patient.patientId) ?? [];
     const cleanup = await Promise.all(deleted.map(removeFiles));
     res.json({ success: true, patientId: req.patient.patientId, deletedExaminations: deleted.length,
       filesRemoved: cleanup.every(Boolean) });
@@ -115,7 +128,7 @@ export function createApp(config) {
     if (patientId !== undefined && (typeof patientId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(patientId))) {
       throw new ApiError(400, 'INVALID_METADATA', 'Invalid patient code.');
     }
-    res.json(await store.listExaminations(patientId));
+    res.json(await req.store.listExaminations(patientId));
   });
   app.post('/api/examinations', async (req, res) => {
     const { patientId, eye, captureType } = req.body ?? {};
@@ -128,11 +141,11 @@ export function createApp(config) {
       examinationId: randomUUID(), patientId, eye, captureType, status: 'CREATED', createdAt,
       completedAt: null, image: null, result: null, error: null, statusHistory: [{ status: 'CREATED', timestamp: createdAt }]
     };
-    await store.save(exam);
+    await req.store.save(exam);
     res.status(201).json(exam);
   });
   async function find(req, res, next) {
-    req.exam = await store.get(req.params.id);
+    req.exam = await req.store.get(req.params.id);
     if (!req.exam) throw new ApiError(404, 'EXAMINATION_NOT_FOUND', 'Examination not found.');
     next();
   }
@@ -140,11 +153,11 @@ export function createApp(config) {
   app.delete('/api/examinations/:id', find, async (req, res) => {
     const id = req.params.id;
     if (busy.has(id) || ['IMAGE_RECEIVED', 'PROCESSING'].includes(req.exam.status)) {
-      throw new ApiError(409, 'EXAMINATION_LOCKED', 'Pemeriksaan sedang diproses. Tunggu hingga selesai sebelum menghapus.');
+      throw new ApiError(409, 'EXAMINATION_LOCKED', 'This examination is processing. Wait until it finishes before deleting it.');
     }
     busy.add(id);
     try {
-      const deleted = await store.deleteExamination(id);
+      const deleted = await req.store.deleteExamination(id);
       if (!deleted) throw new ApiError(404, 'EXAMINATION_NOT_FOUND', 'Examination not found.');
       const filesRemoved = await removeFiles(deleted);
       res.json({ deleted: true, success: true, examinationId: id, filesRemoved });
@@ -166,6 +179,11 @@ export function createApp(config) {
     fileFilter: (req, file, cb) => cb(['image/png', 'image/jpeg'].includes(file.mimetype) ? null :
       new ApiError(400, 'INVALID_IMAGE', 'Only PNG and JPEG are supported.'), true)
   }).single('image');
+  app.post('/api/images/validate', upload, async (req, res) => {
+    if (!req.file) throw new ApiError(400, 'INVALID_IMAGE', 'Choose a JPEG or PNG image.');
+    const validation = await validateInput(req.file.buffer, req.file.mimetype);
+    res.json({ success: true, inputValidation: validation });
+  });
   app.post('/api/examinations/:id/images', find, (req, res, next) => {
     if (req.exam.status !== 'CREATED' || busy.has(req.params.id)) return next(new ApiError(409, 'EXAMINATION_LOCKED', 'Create a new examination for another upload.'));
     const examinationId = req.params.id;
@@ -192,17 +210,20 @@ export function createApp(config) {
         req.file.mimetype !== `image/${metadata.format}`) throw new Error('Invalid format');
       await image.stats();
     } catch { throw new ApiError(400, 'INVALID_IMAGE', 'Image cannot be decoded as a single PNG/JPEG image.'); }
+    // Validate before any file is written or examination status is advanced.
+    // This also protects camera clients that do not call the UI preflight.
+    const validation = await validateInput(req.file.buffer, req.file.mimetype);
     async function transition(status) {
       exam.status = status;
       exam.statusHistory.push({ status, timestamp: new Date().toISOString() });
-      await store.save(exam);
+      await req.store.save(exam);
     }
     try {
       const imageId = randomUUID(), filename = `${imageId}.${metadata.format === 'png' ? 'png' : 'jpg'}`;
       writeFileSync(join(config.uploadDir, filename), req.file.buffer, { flag: 'wx' });
       exam.image = {
         imageId, originalPath: filename, mimeType: req.file.mimetype, sizeBytes: req.file.size,
-        originalSha256: createHash('sha256').update(req.file.buffer).digest('hex'),
+        originalSha256: createHash('sha256').update(req.file.buffer).digest('hex'), inputValidation: validation,
         originalResolution: [metadata.width, metadata.height], deviceId: deviceId || null, capturedAt: capturedAt || null,
         eye: exam.eye, captureType: exam.captureType, processedPath: null, preprocessingVersion: null
       };
@@ -246,22 +267,67 @@ export function createApp(config) {
       throw error;
     }
   });
+  app.post('/api/examinations/:id/explanation', find, async (req, res) => {
+    const exam = req.exam;
+    if (exam.status !== 'COMPLETED' || !exam.result || exam.result.isMock) {
+      throw new ApiError(409, 'EXPLANATION_NOT_AVAILABLE', 'Grad-CAM requires a completed examination from the actual model.');
+    }
+    if (busy.has(exam.examinationId)) throw new ApiError(409, 'EXAMINATION_LOCKED', 'This examination is already being processed.');
+    if (exam.result.explanation?.status === 'AVAILABLE') return res.json(exam);
+    const filename = exam.image?.originalPath;
+    if (!filename || filename !== basename(filename)) throw new ApiError(404, 'IMAGE_NOT_FOUND', 'The saved original image is unavailable.');
+    busy.add(exam.examinationId);
+    const stagedFiles = [];
+    try {
+      let original;
+      try { original = await readFile(resolve(config.uploadDir, filename)); }
+      catch { throw new ApiError(404, 'IMAGE_NOT_FOUND', 'The saved original image is unavailable.'); }
+      const prediction = await predict(config, original, exam.image.mimeType);
+      const current = prediction.result;
+      const previous = exam.result;
+      const sameProbabilities = Object.keys(previous.probabilities).length === Object.keys(current.probabilities).length &&
+        Object.entries(previous.probabilities).every(([key, value]) => Number.isFinite(current.probabilities[key]) && Math.abs(current.probabilities[key] - value) <= 1e-6);
+      if (current.modelVersion !== previous.modelVersion || current.predictedClass !== previous.predictedClass || !sameProbabilities ||
+          current.preprocessingVersion !== previous.preprocessingVersion ||
+          (exam.image.processedSha256 && createHash('sha256').update(prediction.processedBytes).digest('hex') !== exam.image.processedSha256)) {
+        throw new ApiError(409, 'EXPLANATION_MODEL_MISMATCH', 'The current model or preprocessing differs from this examination. Create a new examination instead.');
+      }
+      for (const [key, field, suffix] of [['overlay', 'gradcamPath', 'gradcam'], ['heatmap', 'heatmapPath', 'heatmap']]) {
+        const bytes = prediction.explanation[key];
+        if (!bytes) continue;
+        const name = `${exam.image.imageId}-${randomUUID()}-${suffix}.png`;
+        writeFileSync(join(config.uploadDir, name), bytes, { flag: 'wx' });
+        stagedFiles.push(name);
+        exam.image[field] = name;
+        exam.image[`${suffix}Sha256`] = createHash('sha256').update(bytes).digest('hex');
+      }
+      // Persist only the explanation; keep the original prediction and dates.
+      exam.result.explanation = prediction.explanation.metadata;
+      await req.store.save(exam);
+      stagedFiles.length = 0;
+      res.json(exam);
+    } finally {
+      await Promise.allSettled(stagedFiles.map(name => unlink(resolve(config.uploadDir, name))));
+      busy.delete(exam.examinationId);
+    }
+  });
   const frontend = fileURLToPath(new URL('../../frontend/', import.meta.url));
 
   // NOTE buat FALAH = Ini endpoint GENERATE PDF
   app.get('/api/examinations/:id/report', find, createReportHandler(config));
 
-  app.use(express.static(frontend));
-  app.get(['/dashboard', '/devices', '/patients', '/patients/:patientId', '/examinations/new', '/examinations/:id'], (req, res) => res.sendFile(join(frontend, 'index.html')));
+  app.use(express.static(frontend, { index: 'index.html' }));
+  app.get(['/login', '/register', '/dashboard', '/devices', '/patients', '/patients/:patientId', '/examinations/new', '/examinations/:id'], (req, res) => res.sendFile(join(frontend, 'index.html')));
   app.use((req, res) => res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Route not found.' } }));
   app.use((error, req, res, next) => {
     const tooLarge = error.code === 'LIMIT_FILE_SIZE';
-    const status = tooLarge ? 413 : error instanceof multer.MulterError || error.type === 'entity.parse.failed' ? 400 : error.status || 500;
+    const status = error.code === 11000 ? 409 : tooLarge ? 413 : error instanceof multer.MulterError || error.type === 'entity.parse.failed' ? 400 : error.status || 500;
     res.locals.errorCode = tooLarge ? 'UPLOAD_TOO_LARGE' : error instanceof ApiError ? error.code : status === 400 ? 'INVALID_REQUEST' : 'INTERNAL_ERROR';
     res.status(status).json({
       success: false, error: {
         code: tooLarge ? 'UPLOAD_TOO_LARGE' : error instanceof ApiError ? error.code : status === 400 ? 'INVALID_REQUEST' : 'INTERNAL_ERROR',
-        message: error instanceof ApiError ? error.message : tooLarge ? 'Image exceeds upload limit.' : 'Request could not be processed.'
+        message: error instanceof ApiError ? error.message : tooLarge ? 'Image exceeds upload limit.' : 'Request could not be processed.',
+        ...(error instanceof ApiError && error.details ? { details: error.details } : {})
       }
     });
   });

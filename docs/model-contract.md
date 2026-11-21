@@ -88,3 +88,22 @@ Catat metadata berikut saat checkpoint aktif akan diganti. Metadata operasional 
 - [ ] Nama layer/struktur yang dapat dipakai Grad-CAM.
 
 Sebelum mengganti checkpoint, verifikasi checksum, urutan kelas, preprocessing, versi TensorFlow/Keras, contoh input-output, dan hasil evaluasinya. Setelah itu ubah `MODEL_PATH`, `MODEL_VERSION`, dan `MODEL_CLASS_NAMES`, lalu jalankan readiness dan smoke test end-to-end.
+
+## Grad-CAM mixed-precision compatibility
+
+The active checkpoint uses mixed precision. Grad-CAM reuses its trained head
+and casts gradients and convolutional activations to float32 before weighted
+spatial accumulation and OpenCV resizing. Model weights, prediction logic,
+class order, and probabilities are unchanged. A genuine absence of positive
+activation still returns `UNAVAILABLE / NO_POSITIVE_ACTIVATION`; no heatmap is
+fabricated. Allow up to 90 seconds for CPU inference with Grad-CAM via
+`AI_TIMEOUT_MS`. Older stored examinations can request explanation generation
+through the owner-authenticated API documented in `api.md`.
+
+`gradcam-v2` differentiates the requested class logit before softmax to avoid
+vanishing explanation gradients on very confident predictions. Only the final
+explanation Dense layer is copied with linear activation; prediction weights
+and the original softmax head are not modified. Metadata includes
+`scoreType=logit`. Stored v1 overlays remain readable. This follows the
+[official Keras Grad-CAM example](https://keras.io/examples/vision/grad_cam/)
+which also removes softmax for explanation scoring.

@@ -1,8 +1,16 @@
-# AI Fundus Camera
+# LUXORA
 
-AI Fundus Camera is a local research prototype for fundus-image processing and AI-assisted diabetic-retinopathy screening. It combines an image preprocessing and EfficientNetB3 training pipeline with a Node.js backend, SQLite or MongoDB persistence, and a separate Python AI service.
+LUXORA is a research prototype for fundus-image processing and AI-assisted diabetic-retinopathy screening. It combines an image preprocessing and EfficientNetB3 training pipeline with a Node.js backend, MongoDB account-scoped persistence, and a separate Python AI service.
 
 The project is intended for academic and research use. It is not a certified medical device, does not replace clinical examination, and must not be used as the sole basis for a medical decision.
+
+## Accounts
+
+Image uploads first pass a local semantic fundus-image validator. Non-fundus
+and uncertain images are rejected before storage and DR inference, including
+direct camera uploads. See [input validation](docs/image-input-validation.md).
+
+The English LUXORA interface supports registration, sign-in, sign-out, and a private patient workspace for each user. Accounts and sessions are stored in MongoDB. Read [authentication](docs/authentication.md) for camera tokens, API access, and treatment of legacy records.
 
 ## Capabilities
 
@@ -10,7 +18,7 @@ The repository provides the following working components:
 
 - A local Express backend for creating examinations, receiving fundus images, validating uploads, coordinating inference, and returning stored results.
 - A FastAPI AI service with health/readiness endpoints, explicit mock/model mode, and a structured image-prediction contract.
-- SQLite and MongoDB stores for patients, examinations, uploaded-image metadata, and AI results.
+- MongoDB stores for accounts, sessions, patients, examinations, uploaded-image metadata, and AI results.
 - Image upload validation for supported formats, decompression-bomb protection, maximum file size, maximum pixel count, and image-content verification.
 - Examination status tracking from creation through image receipt, processing, completion, or failure.
 - A deterministic mock adapter for integration tests and a TensorFlow adapter that loads a configured `.keras` model.
@@ -30,7 +38,7 @@ Client
   -> Upload validation and temporary storage
   -> Python AI service
   -> Shared preprocessing + mock or TensorFlow model prediction
-  -> SQLite or MongoDB persistence
+  -> MongoDB account-scoped persistence
   -> Examination result
 ```
 
@@ -108,7 +116,7 @@ The backend preserves the original upload when processing fails and records an e
 
 ## Data Storage
 
-SQLite is created automatically at `data/fundus.sqlite`. The store contains:
+Normal backend startup requires MongoDB. SQLite remains available only in isolated regression tests. MongoDB stores:
 
 - `patients`: patient identifiers and creation timestamps.
 - `examinations`: examination metadata and lifecycle status.
@@ -117,7 +125,7 @@ SQLite is created automatically at `data/fundus.sqlite`. The store contains:
 
 The service stores extensible JSON documents for examination, image, and AI-result records. Uploaded files are stored under `data/uploads/` while the database keeps their metadata and references.
 
-To use MongoDB, configure `DATABASE_URL` and optionally `DATABASE_NAME` in the ignored local `.env` file. The backend selects MongoDB when the URL is non-empty and otherwise retains SQLite. MongoDB writes the four entities to separate collections and uses a transaction for each examination update.
+Configure `DATABASE_URL` and optionally `DATABASE_NAME` in the ignored local `.env`. MongoDB stores accounts, hashed passwords, sessions, and owner-scoped patient/examination data. Transactions keep examination updates consistent. Image files remain in `UPLOAD_DIR`, with metadata in MongoDB. See [authentication and account isolation](docs/authentication.md).
 
 ### MongoDB Atlas Startup Failures
 
@@ -127,7 +135,7 @@ If MongoDB cannot connect, the backend exits without switching to SQLite. The No
 - TLS alerts or server-selection timeouts: in Atlas **Network Access**, allow your current public IP (VPN or network changes can change it). Confirm the cluster is running and your firewall/VPN permits outbound TCP 27017 to its nodes. These errors occur before authentication and do not by themselves prove the password is wrong.
 - Check the connection string and database user credentials after connectivity is working. URL-encode special characters in credentials. Never disable TLS certificate validation to work around this failure.
 
-For intentional offline/local development, set `DATABASE_URL=` in your local `.env` file and remove any non-empty `DATABASE_URL` override in the launching shell, then rerun `npm run backend`. This selects a separate local SQLite database; it does not copy or expose records already stored in Atlas.
+A valid MongoDB connection is required even for local account testing. Empty `DATABASE_URL` stops normal backend startup. Legacy records without an owner remain preserved but invisible to all new accounts.
 
 ## Machine-Learning Pipeline
 
@@ -212,7 +220,8 @@ The active checkpoint is the binary EfficientNetB3 at `models/kaggle-binary/comb
 
 ## Requirements
 
-- Node.js 22.13 or later. The backend uses Node's built-in SQLite support.
+- Node.js 22.13 or later. SQLite is used only by the isolated regression suite.
+- MongoDB with transaction support (for example, an authorized Atlas cluster).
 - Python 3.11 or later (required by the pinned NumPy version).
 - Python packages listed in `services/ai-service/requirements.txt`.
 - TensorFlow and training dependencies when running training; pandas and tqdm when running the batch preprocessing script.
@@ -240,7 +249,7 @@ MODEL_CLASS_NAMES=No DR,DR
 
 Keep `AI_MODE=mock` for deterministic integration tests. The checked-in `.env.example` defaults to mock mode, while this workspace's local `.env` is configured for the integrated model.
 
-Each teammate uses their own `.env`. Leave `DATABASE_URL` empty for a local SQLite database, or configure an authorized MongoDB connection separately. Reports, uploaded images, datasets, and local credentials are excluded from Git. After pulling an existing checkout, update the model settings above and restart both services.
+Each teammate uses their own `.env` with an authorized MongoDB `DATABASE_URL`. Create your own account at `/register`; no default credentials are provided. Reports, uploaded images, datasets, and local credentials are excluded from Git. After pulling an existing checkout, update the model settings above and restart both services.
 
 Start the AI service in one terminal:
 
@@ -254,7 +263,7 @@ Start the backend in a second terminal:
 npm run backend
 ```
 
-Open `http://127.0.0.1:3001/dashboard` to use the frontend. It is served by the backend and requires no separate build step. Risk categories are calculated in the backend independently of inference, with a stored rule version. See [API contract](docs/api.md).
+Open `http://127.0.0.1:3001/register` to create an account, then sign in to your private dashboard. It is served by the backend and requires no separate build step. Risk categories are calculated in the backend independently of inference, with a stored rule version. See [API contract](docs/api.md).
 
 Run a local smoke test in a third terminal:
 
@@ -294,8 +303,8 @@ Generated datasets, model files, SQLite databases, uploads, virtual environments
 - The integrated checkpoint is a research model trained on APTOS data. Its current evaluation is documented in [docs/training.md](docs/training.md); it is not a clinically validated diagnostic model.
 - The repository does not provide a clinical image-quality gate, MQTT transport, or verified physical-camera integration.
 - Grad-CAM describes model sensitivity on the processed image; it is not a validated lesion segmentation or clinical explanation.
-- The backend is designed for local development and does not provide production authentication, HTTPS, or deployment configuration.
-- SQLite usage is intended for a local backend instance rather than a multi-instance production deployment.
+- The backend provides account login and per-account data isolation. HTTPS is supplied by a reverse proxy such as Cloudflare Tunnel. Email verification and password recovery are not implemented.
+- Image files remain on the backend disk; back up `UPLOAD_DIR` as well as MongoDB.
 - Results are preliminary research output and require review by qualified healthcare professionals.
 
 ## License and Use
@@ -304,4 +313,4 @@ This project is an educational and research prototype. Review the repository's p
 
 ### PDF reports
 
-The reporting CLI from branch `Report` is integrated with completed examinations. Install `python -m pip install -r services/pdf_generator/requirement.txt` and click **Unduh PDF** on the result page. The report includes the stored prediction, probabilities, processed image, available Grad-CAM overlay, and model provenance. Set `REPORT_PYTHON` if the generator requires a different Python interpreter. See [demo guide](docs/demo.md).
+The reporting CLI from branch `Report` is integrated with completed examinations. Install `python -m pip install -r services/pdf_generator/requirement.txt` and click **Download report** on the result page. The report includes the stored prediction, probabilities, processed image, available Grad-CAM overlay, and model provenance. Set `REPORT_PYTHON` if the generator requires a different Python interpreter. See [demo guide](docs/demo.md).

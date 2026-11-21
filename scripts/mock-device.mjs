@@ -22,6 +22,7 @@ if (!['LEFT', 'RIGHT'].includes(eye) || !['MACULA_CENTERED', 'OPTIC_DISC_CENTERE
 const mime = ['.jpg', '.jpeg'].includes(extname(imagePath).toLowerCase()) ? 'image/jpeg' : 'image/png';
 const bytes = readFileSync(resolve(imagePath));
 const sha256 = createHash('sha256').update(bytes).digest('hex');
+const authorization = process.env.LUXORA_DEVICE_TOKEN ? { Authorization: `Bearer ${process.env.LUXORA_DEVICE_TOKEN}` } : {};
 let examinationId;
 let capturedAt;
 let requestId;
@@ -29,7 +30,7 @@ let uploadStarted;
 let requestTimeout = 120000;
 let heartbeat;
 async function request(path, body, multipart = false) {
-  const response = await fetch(base + path, { method: 'POST', headers: multipart ? {} : { 'Content-Type': 'application/json' },
+  const response = await fetch(base + path, { method: 'POST', headers: { ...authorization, ...(multipart ? {} : { 'Content-Type': 'application/json' }) },
     body: multipart ? body : JSON.stringify(body), signal: AbortSignal.timeout(requestTimeout) });
   if (multipart) requestId = response.headers.get('x-request-id');
   const data = await response.json();
@@ -41,7 +42,7 @@ async function status(value, message) {
   console.log(`${result.lastSeen} ${deviceId}: ${value}`);
 }
 async function get(path) {
-  const response = await fetch(base + path, { signal: AbortSignal.timeout(5000) });
+  const response = await fetch(base + path, { headers: authorization, signal: AbortSignal.timeout(5000) });
   const body = await response.json();
   if (!response.ok) throw new Error(body.error?.code || `HTTP ${response.status}`);
   return body;
@@ -63,7 +64,7 @@ async function verifyReceipt() {
     throw new Error('Stored examination does not match the uploaded image and metadata.');
   }
   const original = await fetch(`${base}/api/examinations/${examinationId}/images/original`,
-    { signal: AbortSignal.timeout(30000) });
+    { headers: authorization, signal: AbortSignal.timeout(30000) });
   if (!original.ok || createHash('sha256').update(Buffer.from(await original.arrayBuffer())).digest('hex') !== sha256) {
     throw new Error('Original image could not be retrieved intact from the receiver.');
   }

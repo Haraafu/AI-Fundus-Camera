@@ -96,9 +96,9 @@ class TensorFlowModelAdapter:
                 result["explanation"] = self.gradcam.explain(batch, processed, index, prediction["class"])
         except Exception as error:
             # A failed explanation must not masquerade as a heatmap or erase a valid prediction.
-            logging.getLogger(__name__).warning('Grad-CAM unavailable (%s)', type(error).__name__)
+            logging.getLogger(__name__).warning('Grad-CAM unavailable', exc_info=True)
             result["explanation"] = {"status": "UNAVAILABLE", "method": "Grad-CAM",
-                                     "version": "gradcam-v1", "reason": "EXPLANATION_FAILED"}
+                                     "version": "gradcam-v2", "reason": "EXPLANATION_FAILED"}
         return result
 
 

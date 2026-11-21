@@ -6,6 +6,8 @@
 # Dependencies and caches
 .venv/
 node_modules/
+.vercel/
+apps/frontend/dist/
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -20,6 +22,12 @@ models/kaggle-binary/*
 !models/kaggle-binary/combined_dr_binary_b3_v1/
 models/kaggle-binary/combined_dr_binary_b3_v1/*
 !models/kaggle-binary/combined_dr_binary_b3_v1/best.keras
+!models/fundus-input-validator/
+models/fundus-input-validator/*
+!models/fundus-input-validator/vision.onnx
+!models/fundus-input-validator/prototypes.json
+!models/fundus-input-validator/README.md
+!models/fundus-input-validator/LICENSE
 models.zip
 data/
 *.sqlite*
